@@ -1,0 +1,13 @@
+{
+  "name": "esp32-dual-cam-server",
+  "version": "1.0.0",
+  "description": "WebSocket relay server for dual ESP32-CAM side-by-side viewer",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "ws": "^8.18.0"
+  }
+}
