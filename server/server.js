@@ -103,10 +103,9 @@ wss.on('connection', (ws, req) => {
     latestImages[camId] = jpegData;
 
     // Build normalized frame: "camId:" + JPEG (consistent format for browsers)
-    const browserFrame = Buffer.concat([
-      Buffer.from(`${camId}:`, 'utf-8'),
-      jpegData
-    ]);
+    // Build normalized frame: "camId:timestamp:" + JPEG
+    const hdr = Buffer.from(`${camId}:${timestamp.toString()}:`, 'utf-8');
+    const browserFrame = Buffer.concat([hdr, jpegData]);
 
     // Relay to browsers
     for (const b of browserClients) {

@@ -134,6 +134,31 @@
     .view .ph { color: #444; font-size: 1.1rem; }
     .view .ph.hide { display: none; }
 
+    /* ── List rows ── */
+    .list {
+      padding: 10px 14px;
+      background: rgba(255,255,255,0.02);
+      max-height: 180px;
+      overflow: auto;
+      font-size: 0.85rem;
+      color: var(--muted);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .list-row {
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(0,0,0,0.12);
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      color: var(--text);
+    }
+    .list-row .time { color: #9aa; font-size: 0.78rem; }
+    .list-row .meta { color: var(--muted); font-size: 0.82rem; }
+
     /* ── Footer stats ── */
     .stats {
       text-align: center;
@@ -176,6 +201,7 @@
       <img id="img2" alt="Camera 2" />
       <div class="ph" id="ph2">Waiting for Camera 2 …</div>
     </div>
+    <div class="list" id="list2"></div>
   </div>
 
   <!-- Camera 1 -->
@@ -188,14 +214,38 @@
       <img id="img1" alt="Camera 1" />
       <div class="ph" id="ph1">Waiting for Camera 1 …</div>
     </div>
+    <div class="list" id="list1"></div>
   </div>
 </div>
-
-
 
 <div class="stats" id="stats">Connecting …</div>
 
 <script>
+
+class RowList {
+  constructor(container, { maxRows = 200 } = {}) {
+    this.container = container;
+    this.maxRows = maxRows;
+  }
+  add(timeText, metaText) {
+    const row = document.createElement('div');
+    row.className = 'list-row';
+    const time = document.createElement('div');
+    time.className = 'time';
+    time.textContent = timeText;
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = metaText;
+    row.appendChild(time);
+    row.appendChild(meta);
+    this.container.insertBefore(row, this.container.firstChild);
+    while (this.container.children.length > this.maxRows) {
+      this.container.removeChild(this.container.lastChild);
+    }
+  }
+  clear() { this.container.innerHTML = ''; }
+}
+
 /* ── state ── */
 let ws;
 let reconnectTimer;
@@ -208,6 +258,10 @@ const $dotCam2   = document.getElementById('dotCam2');
 const $btnStart  = document.getElementById('btnStart');
 const $btnStop   = document.getElementById('btnStop');
 const $stats     = document.getElementById('stats');
+const $list1     = document.getElementById('list1');
+const $list2     = document.getElementById('list2');
+
+
 
 /* ── helpers ── */
 function send(msg) {
@@ -249,14 +303,26 @@ function connect() {
 
     /* binary → image frame */
     const buf = new Uint8Array(e.data);
-    let colon = -1;
-    for (let i = 0; i < Math.min(buf.length, 10); i++) {
-      if (buf[i] === 0x3A) { colon = i; break; }      // ':'
+    let colon1 = -1, colon2 = -1;
+    for (let i = 0; i < Math.min(buf.length, 64); i++) {
+      if (buf[i] === 0x3A) { // ':'
+        if (colon1 === -1) colon1 = i;
+        else { colon2 = i; break; }
+      }
     }
-    if (colon < 1){ return;}
+    if (colon1 < 1 || colon2 <= colon1) return;
+ 
+    const camId = new TextDecoder().decode(buf.slice(0, colon1));
+    const tsStr = new TextDecoder().decode(buf.slice(colon1 + 1, colon2));
+    const jpeg  = buf.slice(colon2 + 1);
+    // let colon = -1;
+    // for (let i = 0; i < Math.min(buf.length, 10); i++) {
+    //   if (buf[i] === 0x3A) { colon = i; break; }      // ':'
+    // }
+    // if (colon < 1){ return;}
 
-    const camId = new TextDecoder().decode(buf.slice(0, colon));
-    const jpeg  = buf.slice(colon + 1);
+    // const camId = new TextDecoder().decode(buf.slice(0, colon));
+    // const jpeg  = buf.slice(colon + 1);
     const blob  = new Blob([jpeg], { type: 'image/jpeg' });
     const url   = URL.createObjectURL(blob);
     console.log(url);
@@ -276,7 +342,17 @@ function connect() {
     ph.classList.add('hide');
 
     frames[camId] = (frames[camId] || 0) + 1;
-    meta.textContent = `${(jpeg.length / 1024).toFixed(1)} KB  ·  #${frames[camId]}`;
+     // add to appropriate per-camera list
+    const sizeKB = (jpeg.length / 1024).toFixed(1) + ' KB';
+    meta.textContent = `${sizeKB} KB  ·  #${frames[camId]}`;
+    const rowMeta = `#${frames[camId]} · ${sizeKB}`;
+
+
+    const list1 = new RowList($list1, { maxRows: 300 });
+    const list2 = new RowList($list2, { maxRows: 300 });
+        
+    if (camId === 'cam1') list1.add(tsStr, rowMeta);
+    else if (camId === 'cam2') list2.add(tsStr, rowMeta);
 
     $stats.textContent =
       `Frames — Cam1: ${frames.cam1}  |  Cam2: ${frames.cam2}  |  Total: ${frames.cam1 + frames.cam2}`;
