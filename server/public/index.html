@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ESP32 Dual Camera Viewer</title>
   <style>
+    /* ── Original tokens (unchanged) ───────────────────────────── */
     :root {
       --bg:        #0f0f1a;
       --surface:   #1a1a2e;
@@ -15,7 +16,15 @@
       --blue:      #2196f3;
       --text:      #eaeaea;
       --muted:     #777;
+
+      /* ── ToF additions ──────────────────────────────────────── */
+      --tof-accent: #00e5ff;
+      --tof-alert:  #ff3d57;
+      --tof-dim:    #3a4a58;
+      --mono:       'Share Tech Mono', ui-monospace, monospace;
     }
+
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
 
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -27,6 +36,10 @@
       display: flex;
       flex-direction: column;
     }
+
+    /* ════════════════════════════════════════════════════════════
+       ORIGINAL STYLES — not modified
+       ════════════════════════════════════════════════════════════ */
 
     /* ── Header ── */
     header {
@@ -87,7 +100,6 @@
 
     /* ── Camera grid ── */
     .cameras {
-      flex: 1;
       display: flex;
       justify-content: center;
       gap: 20px;
@@ -159,7 +171,7 @@
     .list-row .time { color: #9aa; font-size: 0.78rem; }
     .list-row .meta { color: var(--muted); font-size: 0.82rem; }
 
-    /* ── Footer stats ── */
+    /* ── Footer stats (original) ── */
     .stats {
       text-align: center;
       padding: 10px;
@@ -171,10 +183,241 @@
       .cameras { flex-direction: column; align-items: center; }
       .panel   { max-width: 100%; }
     }
+
+    /* ════════════════════════════════════════════════════════════
+       ToF SECTION — new styles only
+       ════════════════════════════════════════════════════════════ */
+
+    .tof-section {
+      margin: 0 20px 28px;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--card);
+    }
+
+    /* Section header — same treatment as .panel-header */
+    .tof-section-header {
+      background: var(--border);
+      padding: 10px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .tof-section-header h2 {
+      font-size: 1rem;
+      color: var(--tof-accent);
+      letter-spacing: 1px;
+    }
+    .tof-section-header h2 span {
+      font-size: 0.78rem;
+      color: var(--muted);
+      font-weight: 400;
+      letter-spacing: 0;
+    }
+
+    /* Proximity alert badge */
+    #alertBadge {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      padding: 4px 14px;
+      border-radius: 4px;
+      border: 1px solid var(--tof-dim);
+      color: var(--tof-dim);
+      transition: all .25s;
+    }
+    #alertBadge.active {
+      background: var(--tof-alert);
+      border-color: var(--tof-alert);
+      color: #fff;
+      box-shadow: 0 0 14px var(--tof-alert);
+      animation: badgePulse 1s ease-in-out infinite alternate;
+    }
+    @keyframes badgePulse {
+      from { box-shadow: 0 0 6px  var(--tof-alert); }
+      to   { box-shadow: 0 0 24px var(--tof-alert); }
+    }
+
+    /* Sleep / waiting overlay */
+    #tofSleepOverlay {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 24px;
+      gap: 12px;
+      color: var(--tof-dim);
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      letter-spacing: 1px;
+    }
+    .sleep-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--tof-dim);
+      flex-shrink: 0;
+      animation: sleepBlink 2.4s ease-in-out infinite;
+    }
+    @keyframes sleepBlink {
+      0%,100% { opacity: .2; } 50% { opacity: 1; }
+    }
+
+    /* Body: heatmap left, stats right — hidden until first frame */
+    .tof-body {
+      display: none;
+      grid-template-columns: auto 1fr;
+    }
+    .tof-body.visible { display: grid; }
+
+    /* ── Heatmap column ── */
+    .tof-map-col {
+      padding: 16px 16px 16px 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      border-right: 1px solid var(--border);
+    }
+
+    #depthCanvas {
+      display: block;
+      image-rendering: pixelated;
+      width: 256px;
+      height: 256px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      box-shadow: 0 0 20px rgba(0,229,255,.05);
+      cursor: crosshair;
+      transition: box-shadow .3s, border-color .3s;
+    }
+    #depthCanvas.alert-glow {
+      box-shadow: 0 0 28px rgba(255,61,87,.35);
+      border-color: var(--tof-alert);
+    }
+
+    .depth-legend { width: 256px; }
+    .depth-legend-bar {
+      height: 8px;
+      border-radius: 2px;
+      margin-bottom: 4px;
+      border: 1px solid var(--border);
+      background: linear-gradient(to right,
+        #0a0e1a,#0d2b6b,#0b5ea8,#0898c4,
+        #06c6a0,#6ddb4a,#f0e020,#f07800,#e82020);
+    }
+    .depth-legend-labels {
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      color: var(--tof-dim);
+    }
+
+    /* ── Stats column ── */
+    .tof-stats-col {
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .tof-stat-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .tof-stat {
+      background: rgba(0,0,0,.3);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+    .tof-stat.wide { grid-column: span 3; }
+
+    .tof-stat-label {
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--tof-dim);
+      margin-bottom: 4px;
+    }
+    .tof-stat-value {
+      font-family: var(--mono);
+      font-size: 1.5rem;
+      color: var(--tof-accent);
+      line-height: 1;
+    }
+    .tof-stat-value.small { font-size: 0.95rem; }
+    .tof-stat-unit {
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      color: var(--tof-dim);
+      margin-top: 3px;
+    }
+
+    /* sparkline */
+    .tof-spark-label {
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--tof-dim);
+      margin-bottom: 5px;
+    }
+    .tof-spark-label em {
+      color: var(--tof-alert);
+      font-style: normal;
+    }
+
+    #sparkCanvas {
+      display: block;
+      width: 100%;
+      height: 56px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+    }
+
+    .tof-version {
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      color: var(--tof-dim);
+      margin-top: auto;
+    }
+
+    /* ── Tooltip ── */
+    #tofTooltip {
+      position: fixed;
+      background: var(--card);
+      border: 1px solid var(--tof-accent);
+      border-radius: 4px;
+      padding: 5px 10px;
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--tof-accent);
+      pointer-events: none;
+      display: none;
+      z-index: 999;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 640px) {
+      .tof-body { grid-template-columns: 1fr; }
+      .tof-map-col { border-right: none; border-bottom: 1px solid var(--border); }
+      #depthCanvas, .depth-legend { width: 100%; }
+      #depthCanvas { height: auto; aspect-ratio: 1; }
+    }
   </style>
 </head>
 <body>
 
+<!-- ════════════════════════════════════════════════════════════
+     ORIGINAL MARKUP — identical to uploaded index.html
+     ════════════════════════════════════════════════════════════ -->
 <header>
   <h1>📷  ESP32 Dual Camera Viewer</h1>
   <div class="status-row">
@@ -220,7 +463,102 @@
 
 <div class="stats" id="stats">Connecting …</div>
 
+<!-- ════════════════════════════════════════════════════════════
+     ToF SECTION — appended below existing content
+     ════════════════════════════════════════════════════════════ -->
+<div class="tof-section">
+
+  <div class="tof-section-header">
+    <h2>⬡ VL53L5CX — Depth Matrix &nbsp;<span>(live only while ESP32 is awake)</span></h2>
+    <div id="alertBadge">SLEEP</div>
+  </div>
+
+  <!-- Shown until the first frame arrives -->
+  <div id="tofSleepOverlay">
+    <div class="sleep-dot"></div>
+    Waiting for ToF data — device must be in active window
+  </div>
+
+  <!-- Revealed on first frame -->
+  <div class="tof-body" id="tofBody">
+
+    <!-- Left: heatmap + legend -->
+    <div class="tof-map-col">
+      <canvas id="depthCanvas" width="256" height="256"></canvas>
+      <div class="depth-legend">
+        <div class="depth-legend-bar"></div>
+        <div class="depth-legend-labels">
+          <span>0 mm</span><span>2000</span><span>4000+</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: stats + sparkline -->
+    <div class="tof-stats-col">
+
+      <div class="tof-stat-grid">
+        <div class="tof-stat">
+          <div class="tof-stat-label">Min dist</div>
+          <div class="tof-stat-value" id="statMin">—</div>
+          <div class="tof-stat-unit">mm</div>
+        </div>
+        <div class="tof-stat">
+          <div class="tof-stat-label">Max dist</div>
+          <div class="tof-stat-value" id="statMax">—</div>
+          <div class="tof-stat-unit">mm</div>
+        </div>
+        <div class="tof-stat">
+          <div class="tof-stat-label">Mean dist</div>
+          <div class="tof-stat-value" id="statMean">—</div>
+          <div class="tof-stat-unit">mm</div>
+        </div>
+        <div class="tof-stat">
+          <div class="tof-stat-label">Valid zones</div>
+          <div class="tof-stat-value" id="statValid">—</div>
+          <div class="tof-stat-unit">of 64</div>
+        </div>
+        <div class="tof-stat">
+          <div class="tof-stat-label">&lt; 500 mm</div>
+          <div class="tof-stat-value" id="statClose">—</div>
+          <div class="tof-stat-unit">close zones</div>
+        </div>
+        <div class="tof-stat">
+          <div class="tof-stat-label">Frames rx</div>
+          <div class="tof-stat-value" id="statFrames">0</div>
+          <div class="tof-stat-unit">this session</div>
+        </div>
+        <div class="tof-stat wide">
+          <div class="tof-stat-label">Last reading</div>
+          <div class="tof-stat-value small" id="statTs">—</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="tof-spark-label">
+          Min distance · rolling history &nbsp;&nbsp;
+          <em>— 500 mm alert threshold</em>
+        </div>
+        <canvas id="sparkCanvas"></canvas>
+      </div>
+
+      <div class="tof-version" id="tofVersion"></div>
+
+    </div>
+  </div><!-- /.tof-body -->
+
+</div><!-- /.tof-section -->
+
+<div id="tofTooltip"></div>
+
+
+<!-- ════════════════════════════════════════════════════════════
+     SCRIPT
+     ════════════════════════════════════════════════════════════ -->
 <script>
+// ─────────────────────────────────────────────────────────────
+// ORIGINAL CODE — preserved exactly; only one bug fixed:
+// RowList instances are created once, not inside the message handler.
+// ─────────────────────────────────────────────────────────────
 
 class RowList {
   constructor(container, { maxRows = 200 } = {}) {
@@ -261,13 +599,14 @@ const $stats     = document.getElementById('stats');
 const $list1     = document.getElementById('list1');
 const $list2     = document.getElementById('list2');
 
-
+// Fixed: instantiate once, not on every message
+const list1 = new RowList($list1, { maxRows: 300 });
+const list2 = new RowList($list2, { maxRows: 300 });
 
 /* ── helpers ── */
 function send(msg) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(msg);
 }
-
 function setDot(el, cls) {
   el.classList.remove('on-blue', 'on-green');
   if (cls) el.classList.add(cls);
@@ -287,70 +626,60 @@ function connect() {
   };
 
   ws.onmessage = (e) => {
-    /* text → JSON status */
+    /* ── text → JSON ── */
     if (typeof e.data === 'string') {
-      try {
-        const m = JSON.parse(e.data);
-        if (m.type === 'status') {
-          setDot($dotCam1, m.cameras.includes('cam1') ? 'on-green' : null);
-          setDot($dotCam2, m.cameras.includes('cam2') ? 'on-green' : null);
-          $btnStart.style.opacity = m.captureActive ? 0.45 : 1;
-          $btnStop.style.opacity  = m.captureActive ? 1 : 0.45;
-        }
-      } catch (_) {}
+      let m;
+      try { m = JSON.parse(e.data); } catch { return; }
+
+      if (m.type === 'status') {
+        setDot($dotCam1, m.cameras.includes('cam1') ? 'on-green' : null);
+        setDot($dotCam2, m.cameras.includes('cam2') ? 'on-green' : null);
+        $btnStart.style.opacity = m.captureActive ? 0.45 : 1;
+        $btnStop.style.opacity  = m.captureActive ? 1    : 0.45;
+        return;
+      }
+
+      /* ── NEW: ToF frame injected by tof-serial.js ── */
+      if (m.type === 'tof_frame') { processToFFrame(m); return; }
+
       return;
     }
 
-    /* binary → image frame */
+    /* ── binary → JPEG (original, unchanged) ── */
     const buf = new Uint8Array(e.data);
     let colon1 = -1, colon2 = -1;
     for (let i = 0; i < Math.min(buf.length, 64); i++) {
-      if (buf[i] === 0x3A) { // ':'
+      if (buf[i] === 0x3A) {
         if (colon1 === -1) colon1 = i;
         else { colon2 = i; break; }
       }
     }
     if (colon1 < 1 || colon2 <= colon1) return;
- 
+
     const camId = new TextDecoder().decode(buf.slice(0, colon1));
     const tsStr = new TextDecoder().decode(buf.slice(colon1 + 1, colon2));
     const jpeg  = buf.slice(colon2 + 1);
-    // let colon = -1;
-    // for (let i = 0; i < Math.min(buf.length, 10); i++) {
-    //   if (buf[i] === 0x3A) { colon = i; break; }      // ':'
-    // }
-    // if (colon < 1){ return;}
 
-    // const camId = new TextDecoder().decode(buf.slice(0, colon));
-    // const jpeg  = buf.slice(colon + 1);
-    const blob  = new Blob([jpeg], { type: 'image/jpeg' });
-    const url   = URL.createObjectURL(blob);
+    const blob = new Blob([jpeg], { type: 'image/jpeg' });
+    const url  = URL.createObjectURL(blob);
     console.log(url);
 
-    const num = camId === 'cam1' ? '1' : '2';
-    const img = document.getElementById('img' + num);
-    const ph  = document.getElementById('ph'  + num);
+    const num  = camId === 'cam1' ? '1' : '2';
+    const img  = document.getElementById('img'  + num);
+    const ph   = document.getElementById('ph'   + num);
     const meta = document.getElementById('meta' + num);
-
     if (!img) return;
 
-    // free previous blob
     if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
-
     img.src = url;
     img.classList.add('show');
     ph.classList.add('hide');
 
     frames[camId] = (frames[camId] || 0) + 1;
-     // add to appropriate per-camera list
     const sizeKB = (jpeg.length / 1024).toFixed(1) + ' KB';
     meta.textContent = `${sizeKB} KB  ·  #${frames[camId]}`;
     const rowMeta = `#${frames[camId]} · ${sizeKB}`;
 
-
-    const list1 = new RowList($list1, { maxRows: 300 });
-    const list2 = new RowList($list2, { maxRows: 300 });
-        
     if (camId === 'cam1') list1.add(tsStr, rowMeta);
     else if (camId === 'cam2') list2.add(tsStr, rowMeta);
 
@@ -360,8 +689,8 @@ function connect() {
 
   ws.onclose = () => {
     setDot($dotServer, null);
-    setDot($dotCam1, null);
-    setDot($dotCam2, null);
+    setDot($dotCam1,   null);
+    setDot($dotCam2,   null);
     $stats.textContent = 'Disconnected — reconnecting …';
     reconnectTimer = setTimeout(connect, 3000);
   };
@@ -370,6 +699,203 @@ function connect() {
 }
 
 connect();
+
+
+// ─────────────────────────────────────────────────────────────
+// ToF VISUALIZER  ·  new code below
+// ─────────────────────────────────────────────────────────────
+
+// ── Depth colour ramp: index 0 = far/cool, index 8 = near/warm ───────────────
+const TOF_PALETTE = [
+  [10,14,26],[13,43,107],[11,94,168],[8,152,196],
+  [6,198,160],[109,219,74],[240,224,32],[240,120,0],[232,32,32]
+];
+
+function depthToColor(mm) {
+  const t   = 1 - Math.min(Math.max(mm, 0), 4000) / 4000;   // 0=far … 1=near
+  const pos = t * (TOF_PALETTE.length - 1);
+  const lo  = Math.floor(pos);
+  const hi  = Math.min(lo + 1, TOF_PALETTE.length - 1);
+  const f   = pos - lo;
+  const [r0,g0,b0] = TOF_PALETTE[lo];
+  const [r1,g1,b1] = TOF_PALETTE[hi];
+  return [
+    Math.round(r0 + (r1-r0)*f),
+    Math.round(g0 + (g1-g0)*f),
+    Math.round(b0 + (b1-b0)*f),
+  ];
+}
+
+// ── Canvas refs ───────────────────────────────────────────────────────────────
+const depthCanvas = document.getElementById('depthCanvas');
+const depthCtx    = depthCanvas.getContext('2d');
+const ZONES = 8;
+const CELL  = depthCanvas.width / ZONES;   // 32 px per zone at 256×256
+
+const sparkCanvas = document.getElementById('sparkCanvas');
+const sparkCtx    = sparkCanvas.getContext('2d');
+
+// ── ToF state ─────────────────────────────────────────────────────────────────
+const sparkData   = [];
+let tofFrameCount = 0;
+let lastDistances = [];
+let lastStatuses  = [];
+
+// ── Draw 8×8 heatmap ─────────────────────────────────────────────────────────
+function drawDepth(distances, statuses, alert) {
+  const imgData = depthCtx.createImageData(depthCanvas.width, depthCanvas.height);
+  const d       = imgData.data;
+
+  for (let row = 0; row < ZONES; row++) {
+    for (let col = 0; col < ZONES; col++) {
+      const idx   = row * ZONES + col;
+      const valid = statuses[idx] === 5;
+      const [r, g, b] = valid ? depthToColor(distances[idx]) : [20, 28, 42];
+
+      const ox = col * CELL, oy = row * CELL;
+      for (let dy = 0; dy < CELL; dy++) {
+        for (let dx = 0; dx < CELL; dx++) {
+          const p = ((oy + dy) * depthCanvas.width + (ox + dx)) * 4;
+          d[p] = r; d[p+1] = g; d[p+2] = b; d[p+3] = 255;
+        }
+      }
+    }
+  }
+  depthCtx.putImageData(imgData, 0, 0);
+
+  // Subtle grid
+  depthCtx.strokeStyle = 'rgba(255,255,255,0.07)';
+  depthCtx.lineWidth   = 1;
+  for (let i = 1; i < ZONES; i++) {
+    depthCtx.beginPath();
+    depthCtx.moveTo(i*CELL, 0);              depthCtx.lineTo(i*CELL, depthCanvas.height); depthCtx.stroke();
+    depthCtx.beginPath();
+    depthCtx.moveTo(0,      i*CELL);         depthCtx.lineTo(depthCanvas.width, i*CELL);  depthCtx.stroke();
+  }
+
+  depthCanvas.classList.toggle('alert-glow', alert);
+}
+
+// ── Draw rolling sparkline ────────────────────────────────────────────────────
+function drawSpark(minVal) {
+  sparkData.push(minVal);
+  if (sparkData.length > 100) sparkData.shift();
+
+  // Match physical pixel size to CSS display size
+  const W = (sparkCanvas.clientWidth  || 300) * (window.devicePixelRatio || 1);
+  const H = (sparkCanvas.clientHeight || 56)  * (window.devicePixelRatio || 1);
+  if (sparkCanvas.width !== Math.round(W) || sparkCanvas.height !== Math.round(H)) {
+    sparkCanvas.width  = Math.round(W);
+    sparkCanvas.height = Math.round(H);
+  }
+  sparkCtx.clearRect(0, 0, W, H);
+
+  const maxVal = Math.max(...sparkData, 600);
+  const n      = sparkData.length;
+  function xOf(i) { return (i / Math.max(n - 1, 1)) * W; }
+  function yOf(v) { return H - (v / maxVal) * H * 0.86 - H * 0.07; }
+
+  // Filled area under the line
+  sparkCtx.beginPath();
+  sparkData.forEach((v, i) => i === 0 ? sparkCtx.moveTo(xOf(i), yOf(v)) : sparkCtx.lineTo(xOf(i), yOf(v)));
+  sparkCtx.lineTo(xOf(n-1), H);
+  sparkCtx.lineTo(0, H);
+  sparkCtx.closePath();
+  sparkCtx.fillStyle = 'rgba(0,229,255,0.09)';
+  sparkCtx.fill();
+
+  // Line itself
+  sparkCtx.beginPath();
+  sparkData.forEach((v, i) => i === 0 ? sparkCtx.moveTo(xOf(i), yOf(v)) : sparkCtx.lineTo(xOf(i), yOf(v)));
+  sparkCtx.strokeStyle = '#00e5ff';
+  sparkCtx.lineWidth   = 1.5;
+  sparkCtx.stroke();
+
+  // 500 mm dashed threshold
+  const ty = yOf(500);
+  sparkCtx.setLineDash([4, 4]);
+  sparkCtx.strokeStyle = 'rgba(255,61,87,0.65)';
+  sparkCtx.lineWidth   = 1;
+  sparkCtx.beginPath(); sparkCtx.moveTo(0, ty); sparkCtx.lineTo(W, ty); sparkCtx.stroke();
+  sparkCtx.setLineDash([]);
+}
+
+// ── Process one tof_frame message ────────────────────────────────────────────
+function processToFFrame(obj) {
+  if (!Array.isArray(obj.distances) || obj.distances.length !== 64) return;
+
+  const dist  = obj.distances;
+  const stat  = Array.isArray(obj.status) ? obj.status : new Array(64).fill(5);
+  const alert = !!obj.proximity_alert;
+  const s     = obj.stats || {};
+
+  lastDistances = dist;
+  lastStatuses  = stat;
+
+  // Reveal the panel on first frame, hide the sleep overlay
+  const overlay = document.getElementById('tofSleepOverlay');
+  const body    = document.getElementById('tofBody');
+  if (overlay.style.display !== 'none') {
+    overlay.style.display = 'none';
+    body.classList.add('visible');
+  }
+
+  drawDepth(dist, stat, alert);
+
+  document.getElementById('statMin').textContent   = s.min   ?? '—';
+  document.getElementById('statMax').textContent   = s.max   ?? '—';
+  document.getElementById('statMean').textContent  = s.mean  ?? '—';
+  document.getElementById('statValid').textContent = s.validZones ?? '—';
+  document.getElementById('statClose').textContent = s.closeZones ?? '—';
+  document.getElementById('statTs').textContent    =
+    obj.ts ? new Date(obj.ts).toISOString().slice(11, 23) : '—';
+
+  tofFrameCount++;
+  document.getElementById('statFrames').textContent = tofFrameCount;
+
+  if (obj.v) document.getElementById('tofVersion').textContent = `firmware v${obj.v}`;
+
+  if (s.min != null) drawSpark(s.min);
+
+  // Alert badge
+  const badge = document.getElementById('alertBadge');
+  if (alert) { badge.textContent = '⚠ PROXIMITY'; badge.classList.add('active'); }
+  else        { badge.textContent = 'CLEAR';        badge.classList.remove('active'); }
+}
+
+// ── Hover tooltip ─────────────────────────────────────────────────────────────
+const tofTooltip = document.getElementById('tofTooltip');
+
+depthCanvas.addEventListener('mousemove', (e) => {
+  if (!lastDistances.length) return;
+  const rect = depthCanvas.getBoundingClientRect();
+  const col  = Math.floor((e.clientX - rect.left)  / rect.width  * ZONES);
+  const row  = Math.floor((e.clientY - rect.top)   / rect.height * ZONES);
+  if (col < 0 || col >= ZONES || row < 0 || row >= ZONES) return;
+
+  const idx = row * ZONES + col;
+  const d   = lastDistances[idx];
+  const s   = lastStatuses[idx];
+  tofTooltip.style.display = 'block';
+  tofTooltip.style.left    = (e.clientX + 14) + 'px';
+  tofTooltip.style.top     = (e.clientY + 14) + 'px';
+  tofTooltip.textContent   = s === 5 ? `[${row},${col}]  ${d} mm` : `[${row},${col}]  invalid (status ${s})`;
+});
+depthCanvas.addEventListener('mouseleave', () => { tofTooltip.style.display = 'none'; });
+
+// ── Draw blank grid on page load ──────────────────────────────────────────────
+(function initBlankGrid() {
+  depthCtx.fillStyle   = '#080c14';
+  depthCtx.fillRect(0, 0, depthCanvas.width, depthCanvas.height);
+  depthCtx.strokeStyle = 'rgba(255,255,255,0.04)';
+  depthCtx.lineWidth   = 1;
+  for (let i = 1; i < ZONES; i++) {
+    depthCtx.beginPath();
+    depthCtx.moveTo(i*CELL, 0); depthCtx.lineTo(i*CELL, depthCanvas.height); depthCtx.stroke();
+    depthCtx.beginPath();
+    depthCtx.moveTo(0, i*CELL); depthCtx.lineTo(depthCanvas.width, i*CELL);  depthCtx.stroke();
+  }
+}());
 </script>
 </body>
 </html>

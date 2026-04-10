@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ESP32 Dual Camera Viewer</title>
+  <style>
+    :root {
+      --bg:        #0f0f1a;
+      --surface:   #1a1a2e;
+      --card:      #16213e;
+      --border:    #0f3460;
+      --accent:    #e94560;
+      --green:     #4caf50;
+      --blue:      #2196f3;
+      --text:      #eaeaea;
+      --muted:     #777;
+    }
+
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--surface);
+      padding: 18px 24px;
+      text-align: center;
+      border-bottom: 2px solid var(--border);
+    }
+    header h1 {
+      font-size: 1.6rem;
+      color: var(--accent);
+      margin-bottom: 12px;
+    }
+    .status-row {
+      display: flex;
+      justify-content: center;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.9rem;
+    }
+    .dot {
+      width: 11px; height: 11px;
+      border-radius: 50%;
+      background: #444;
+      transition: background .3s, box-shadow .3s;
+    }
+    .dot.on-blue  { background: var(--blue);  box-shadow: 0 0 6px var(--blue);  }
+    .dot.on-green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+
+    /* ── Controls ── */
+    .controls {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      padding: 14px;
+      background: var(--surface);
+      flex-wrap: wrap;
+    }
+    button {
+      padding: 10px 22px;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: .9rem;
+      cursor: pointer;
+      transition: opacity .15s, transform .1s;
+    }
+    button:hover  { transform: translateY(-1px); }
+    button:active { transform: translateY(0); }
+    .btn-snap  { background: var(--accent); color: #fff; }
+    .btn-start { background: var(--green);  color: #fff; }
+    .btn-stop  { background: #ff9800;       color: #fff; }
+
+    /* ── Camera grid ── */
+    .cameras {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      padding: 20px;
+      flex-wrap: wrap;
+    }
+    .panel {
+      flex: 1;
+      min-width: 300px;
+      max-width: 640px;
+      background: var(--card);
+      border-radius: 12px;
+      overflow: hidden;
+      border: 2px solid var(--border);
+      display: flex;
+      flex-direction: column;
+    }
+    .panel-header {
+      padding: 10px 16px;
+      background: var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .panel-header h2 { font-size: 1rem; color: var(--accent); }
+    .panel-header .meta { font-size: .78rem; color: var(--muted); }
+
+    .view {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      background: #080812;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .view img {
+      width: 100%; height: 100%;
+      object-fit: contain;
+      display: none;
+    }
+    .view img.show { display: block; }
+    .view .ph { color: #444; font-size: 1.1rem; }
+    .view .ph.hide { display: none; }
+
+    /* ── List rows ── */
+    .list {
+      padding: 10px 14px;
+      background: rgba(255,255,255,0.02);
+      max-height: 180px;
+      overflow: auto;
+      font-size: 0.85rem;
+      color: var(--muted);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .list-row {
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(0,0,0,0.12);
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      color: var(--text);
+    }
+    .list-row .time { color: #9aa; font-size: 0.78rem; }
+    .list-row .meta { color: var(--muted); font-size: 0.82rem; }
+
+    /* ── Footer stats ── */
+    .stats {
+      text-align: center;
+      padding: 10px;
+      font-size: .82rem;
+      color: var(--muted);
+    }
+
+    @media (max-width: 720px) {
+      .cameras { flex-direction: column; align-items: center; }
+      .panel   { max-width: 100%; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>📷  ESP32 Dual Camera Viewer</h1>
+  <div class="status-row">
+    <div class="status-item"><div class="dot" id="dotServer"></div><span>Server</span></div>
+    <div class="status-item"><div class="dot" id="dotCam1"></div><span>Camera 1</span></div>
+    <div class="status-item"><div class="dot" id="dotCam2"></div><span>Camera 2</span></div>
+  </div>
+</header>
+
+<div class="controls">
+  <button class="btn-snap"  onclick="send('trigger_capture')">📸 Capture Now</button>
+  <button class="btn-start" id="btnStart" onclick="send('start_auto')">▶ Start Auto</button>
+  <button class="btn-stop"  id="btnStop"  onclick="send('stop_auto')">⏹ Stop Auto</button>
+</div>
+
+<div class="cameras">
+  <!-- Camera 2 -->
+  <div class="panel">
+    <div class="panel-header">
+      <h2>📷 Camera 2</h2>
+      <span class="meta" id="meta2">—</span>
+    </div>
+    <div class="view">
+      <img id="img2" alt="Camera 2" />
+      <div class="ph" id="ph2">Waiting for Camera 2 …</div>
+    </div>
+    <div class="list" id="list2"></div>
+  </div>
+
+  <!-- Camera 1 -->
+  <div class="panel">
+    <div class="panel-header">
+      <h2>📷 Camera 1</h2>
+      <span class="meta" id="meta1">—</span>
+    </div>
+    <div class="view">
+      <img id="img1" alt="Camera 1" />
+      <div class="ph" id="ph1">Waiting for Camera 1 …</div>
+    </div>
+    <div class="list" id="list1"></div>
+  </div>
+</div>
+
+<div class="stats" id="stats">Connecting …</div>
+
+<script>
+
+class RowList {
+  constructor(container, { maxRows = 200 } = {}) {
+    this.container = container;
+    this.maxRows = maxRows;
+  }
+  add(timeText, metaText) {
+    const row = document.createElement('div');
+    row.className = 'list-row';
+    const time = document.createElement('div');
+    time.className = 'time';
+    time.textContent = timeText;
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = metaText;
+    row.appendChild(time);
+    row.appendChild(meta);
+    this.container.insertBefore(row, this.container.firstChild);
+    while (this.container.children.length > this.maxRows) {
+      this.container.removeChild(this.container.lastChild);
+    }
+  }
+  clear() { this.container.innerHTML = ''; }
+}
+
+/* ── state ── */
+let ws;
+let reconnectTimer;
+const frames = { cam1: 0, cam2: 0 };
+
+/* ── elements ── */
+const $dotServer = document.getElementById('dotServer');
+const $dotCam1   = document.getElementById('dotCam1');
+const $dotCam2   = document.getElementById('dotCam2');
+const $btnStart  = document.getElementById('btnStart');
+const $btnStop   = document.getElementById('btnStop');
+const $stats     = document.getElementById('stats');
+const $list1     = document.getElementById('list1');
+const $list2     = document.getElementById('list2');
+
+
+
+/* ── helpers ── */
+function send(msg) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(msg);
+}
+
+function setDot(el, cls) {
+  el.classList.remove('on-blue', 'on-green');
+  if (cls) el.classList.add(cls);
+}
+
+/* ── WebSocket ── */
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    setDot($dotServer, 'on-blue');
+    $stats.textContent = 'Connected to server';
+    ws.send('browser');
+    clearTimeout(reconnectTimer);
+  };
+
+  ws.onmessage = (e) => {
+    /* text → JSON status */
+    if (typeof e.data === 'string') {
+      try {
+        const m = JSON.parse(e.data);
+        if (m.type === 'status') {
+          setDot($dotCam1, m.cameras.includes('cam1') ? 'on-green' : null);
+          setDot($dotCam2, m.cameras.includes('cam2') ? 'on-green' : null);
+          $btnStart.style.opacity = m.captureActive ? 0.45 : 1;
+          $btnStop.style.opacity  = m.captureActive ? 1 : 0.45;
+        }
+      } catch (_) {}
+      return;
+    }
+
+    /* binary → image frame */
+    const buf = new Uint8Array(e.data);
+    let colon1 = -1, colon2 = -1;
+    for (let i = 0; i < Math.min(buf.length, 64); i++) {
+      if (buf[i] === 0x3A) { // ':'
+        if (colon1 === -1) colon1 = i;
+        else { colon2 = i; break; }
+      }
+    }
+    if (colon1 < 1 || colon2 <= colon1) return;
+ 
+    const camId = new TextDecoder().decode(buf.slice(0, colon1));
+    const tsStr = new TextDecoder().decode(buf.slice(colon1 + 1, colon2));
+    const jpeg  = buf.slice(colon2 + 1);
+    // let colon = -1;
+    // for (let i = 0; i < Math.min(buf.length, 10); i++) {
+    //   if (buf[i] === 0x3A) { colon = i; break; }      // ':'
+    // }
+    // if (colon < 1){ return;}
+
+    // const camId = new TextDecoder().decode(buf.slice(0, colon));
+    // const jpeg  = buf.slice(colon + 1);
+    const blob  = new Blob([jpeg], { type: 'image/jpeg' });
+    const url   = URL.createObjectURL(blob);
+    console.log(url);
+
+    const num = camId === 'cam1' ? '1' : '2';
+    const img = document.getElementById('img' + num);
+    const ph  = document.getElementById('ph'  + num);
+    const meta = document.getElementById('meta' + num);
+
+    if (!img) return;
+
+    // free previous blob
+    if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
+
+    img.src = url;
+    img.classList.add('show');
+    ph.classList.add('hide');
+
+    frames[camId] = (frames[camId] || 0) + 1;
+     // add to appropriate per-camera list
+    const sizeKB = (jpeg.length / 1024).toFixed(1) + ' KB';
+    meta.textContent = `${sizeKB} KB  ·  #${frames[camId]}`;
+    const rowMeta = `#${frames[camId]} · ${sizeKB}`;
+
+
+    const list1 = new RowList($list1, { maxRows: 300 });
+    const list2 = new RowList($list2, { maxRows: 300 });
+        
+    if (camId === 'cam1') list1.add(tsStr, rowMeta);
+    else if (camId === 'cam2') list2.add(tsStr, rowMeta);
+
+    $stats.textContent =
+      `Frames — Cam1: ${frames.cam1}  |  Cam2: ${frames.cam2}  |  Total: ${frames.cam1 + frames.cam2}`;
+  };
+
+  ws.onclose = () => {
+    setDot($dotServer, null);
+    setDot($dotCam1, null);
+    setDot($dotCam2, null);
+    $stats.textContent = 'Disconnected — reconnecting …';
+    reconnectTimer = setTimeout(connect, 3000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+connect();
+</script>
+</body>
+</html>
