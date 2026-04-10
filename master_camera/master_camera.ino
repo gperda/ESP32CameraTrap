@@ -84,6 +84,7 @@ struct SyncPacket {
 };
 
 volatile bool ackReceived = false;
+volatile bool slaveReady = false;
 // =================== Camera ===================
 int initCamera(void) {
   camera_config_t config;
@@ -226,6 +227,9 @@ void onReceive(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
     if (len == 1 && data[0] == 0xBB) {
         ackReceived = true;
     }
+    if (len == 1 && data[0] == 0xCC) {
+      slaveReady = true;
+    }
 }
 
 
@@ -357,7 +361,9 @@ void sendPicture(Picture p){
 // Captures a frame and writes it directly to SD from the camera frame buffer.
 // Returns the timestamp used as the filename key, or 0 on failure.
 int captureToSD(uint64_t timestamp) {
+  Serial.printf("%llu\n", esp_timer_get_time());
   camera_fb_t* fb = esp_camera_fb_get();
+  Serial.printf("%llu\n", esp_timer_get_time());
   if (!fb) {
     Serial.println("Capture failed");
     return 0;
@@ -474,17 +480,17 @@ void setup() {
       pkt.timestamp_us = esp_timer_get_time();
 
       ackReceived = false;
+      slaveReady = false;
       esp_err_t res = esp_now_send(slaveMAC, (uint8_t*)&pkt, sizeof(pkt));
 
       unsigned long t = millis();
-      while (!ackReceived && millis() - t < 500);
+      while (!(ackReceived && slaveReady) && millis() - t < 1000);
       //TODO BLOCKING SEMAPHORE?
       if (!ackReceived) {
         Serial.println("No ACK from slave, aborting");
         goToSleep();
       }
 
-      Serial.println("ACK received, capturing");
       if(captureToSD(pkt.timestamp_us) == 0)
         Serial.println("Error with capture");
         // do something

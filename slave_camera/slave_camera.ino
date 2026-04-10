@@ -118,7 +118,6 @@ int initCamera(void) {
   // if PSRAM IC present, init with UXGA resolution and higher JPEG quality
   // for larger pre-allocated frame buffer.
   if(psramFound()){
-    Serial.println("PSRAM found");
     config.jpeg_quality = 10;
     config.fb_count = 2;
     config.grab_mode = CAMERA_GRAB_LATEST;
@@ -344,7 +343,9 @@ void onSend(const uint8_t *mac_addr, esp_now_send_status_t status){
 // }
 
 int captureToSD(uint64_t timestamp) {
+  Serial.printf("%llu\n", esp_timer_get_time());
   camera_fb_t* fb = esp_camera_fb_get();
+  Serial.printf("%llu\n", esp_timer_get_time());
   if (!fb) {
     Serial.println("Capture failed");
     return 0;
@@ -423,8 +424,11 @@ void setup() {
 void loop() {
   if (shouldCapture) {
     shouldCapture = false;
-    Serial.printf("Sync timestamp: %llu us\n", captureTimestamp);
-    captureToSD(captureTimestamp);
+    //Serial.printf("Sync timestamp: %llu us\n", captureTimestamp);
+    uint8_t ack = 0xCC;
+    esp_now_send(masterMAC, &ack, 1);
+    if(captureToSD(captureTimestamp) == 0)
+        Serial.println("Error with capture");
     goToSleep(); //if images are stored and sent later
   } 
   if (shouldConnect) {
