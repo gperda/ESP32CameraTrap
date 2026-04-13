@@ -28,7 +28,7 @@ using namespace websockets;
 
 // =================== CONFIGURATION ===================
 #define CAMERA_ID "cam2"   // ← This is the only difference from cam1
-#define MAX_FRAME_SIZE 128000
+#define MAX_FRAME_SIZE 228000
 #define TRIGGER_WAKEUP_PIN GPIO_NUM_21
 
 const char* ssid     = "Redmi Note 11S";
@@ -137,13 +137,13 @@ int initCamera(void) {
   }
 
   sensor_t * s = esp_camera_sensor_get();
-  // initial sensors are flipped vertically and colors are a bit saturated
+  // // initial sensors are flipped vertically and colors are a bit saturated
   s->set_vflip(s, 1); // flip it back
   s->set_brightness(s, 1); // up the brightness just a bit
   s->set_saturation(s, 0); // lower the saturation
+  delay(1000);
 
   Serial.println("Camera configuration complete!");
-  delay(10);
   return 1;
 }
 
@@ -196,6 +196,11 @@ void onEvent(WebsocketsEvent event, String data) {
   }
 }
 
+
+void onSend(const uint8_t *mac_addr, esp_now_send_status_t status){
+  Serial.print(status == ESP_NOW_SEND_SUCCESS ? "Delivered\n" : "Delivery Fail\n");
+}
+
 void onReceive(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
     if (len < (int)sizeof(SyncPacket)) return;
 
@@ -206,6 +211,7 @@ void onReceive(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
         captureTimestamp = pkt.timestamp_us;
         shouldCapture    = true;
         uint8_t ack      = 0xBB;
+        Serial.print("Capture signal: ");
         esp_now_send(masterMAC, &ack, 1);
     } else if (pkt.type == 0x02) {
         shouldConnect = true;
@@ -308,13 +314,10 @@ void sendFromSD(uint64_t timestamp) {
 
   bool ret = client.sendBinary((const char*)g_sendBuf, totalLen);
   Serial.println(ret ? "WS send OK" : "WS send Error");
-  delay(100);
+  // delay(100);
 }
 
 
-void onSend(const uint8_t *mac_addr, esp_now_send_status_t status){
-  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
-}
 
 // void onDataRcv(const uint8_t *mac_addr, const uint8_t *incomingData, int len){
 //   memcpy(&in_msg, incomingData, sizeof(in_msg));
@@ -343,9 +346,10 @@ void onSend(const uint8_t *mac_addr, esp_now_send_status_t status){
 // }
 
 int captureToSD(uint64_t timestamp) {
-  Serial.printf("%llu\n", esp_timer_get_time());
+  uint64_t t = esp_timer_get_time();
+  Serial.print("Capturing -> ");
   camera_fb_t* fb = esp_camera_fb_get();
-  Serial.printf("%llu\n", esp_timer_get_time());
+  Serial.printf("%llu\n", esp_timer_get_time()-t);
   if (!fb) {
     Serial.println("Capture failed");
     return 0;
@@ -426,25 +430,28 @@ void loop() {
     shouldCapture = false;
     //Serial.printf("Sync timestamp: %llu us\n", captureTimestamp);
     uint8_t ack = 0xCC;
+    Serial.print("Slave ready: ");
     esp_now_send(masterMAC, &ack, 1);
     if(captureToSD(captureTimestamp) == 0)
         Serial.println("Error with capture");
     goToSleep(); //if images are stored and sent later
   } 
-  if (shouldConnect) {
+  // if (shouldConnect) {
+  //   esp_now_deinit();
+  //   connectToWiFi();
+  //   connectWS();
+  //   shouldConnect = false;
+  //   // ACK esp_now_send()
+  //   //esp_now_deinit();   // free the radio before switching to full WiFi
+  //   //startWifiAndSend();
+  //   //esp_now_deinit(); // Cam1 wakes cam2 over pin
+  //   //goToSleep();
+  // }
+  if (shouldSend) {
+    shouldSend = false;
     esp_now_deinit();
     connectToWiFi();
     connectWS();
-    shouldConnect = false;
-    // ACK esp_now_send()
-    //esp_now_deinit();   // free the radio before switching to full WiFi
-    //startWifiAndSend();
-    //esp_now_deinit(); // Cam1 wakes cam2 over pin
-    //goToSleep();
-  }
-  if (shouldSend) {
-    shouldSend = false;
-
     // Allocate the single send buffer from PSRAM once at startup
     g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
     if (!g_sendBuf) {

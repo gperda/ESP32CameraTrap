@@ -11,7 +11,7 @@ void sdmmcInit(void){
       Serial.println("No SD_MMC card attached");
       return;
   }
-  Serial.print("SD_MMC Card Type: ");
+//   Serial.print("SD_MMC Card Type: ");
   if(cardType == CARD_MMC){
       Serial.println("MMC");
   } else if(cardType == CARD_SD){
@@ -22,9 +22,9 @@ void sdmmcInit(void){
       Serial.println("UNKNOWN");
   }
   uint64_t cardSize = SD_MMC.cardSize() / (1024 * 1024);
-  Serial.printf("SD_MMC Card Size: %lluMB\n", cardSize);  
-  Serial.printf("Total space: %lluMB\r\n", SD_MMC.totalBytes() / (1024 * 1024));
-  Serial.printf("Used space: %lluMB\r\n", SD_MMC.usedBytes() / (1024 * 1024));
+//   Serial.printf("SD_MMC Card Size: %lluMB\n", cardSize);  
+//   Serial.printf("Total space: %lluMB\r\n", SD_MMC.totalBytes() / (1024 * 1024));
+//   Serial.printf("Used space: %lluMB\r\n", SD_MMC.usedBytes() / (1024 * 1024));
 }
 
 void listDir(fs::FS &fs, const char * dirname, uint8_t levels){
@@ -187,7 +187,7 @@ void writejpg(fs::FS &fs, const char * path, const uint8_t *buf, size_t size){
       return;
     }
     file.write(buf, size);
-    Serial.printf("Saved file to path: %s\r\n", path);
+    // Serial.printf("Saved file to path: %s\r\n", path);
 }
 
 int readFileNum(fs::FS &fs, const char * dirname){
