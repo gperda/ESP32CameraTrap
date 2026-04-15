@@ -147,14 +147,9 @@ int initCamera(void) {
   return 1;
 }
 
-bool resolveServer(){
-  Serial.printf("Resolving %s.local \n", server_hostname);
+bool resolveServer() {
   IPAddress serverIP = MDNS.queryHost(server_hostname);
-  if (serverIP == IPAddress(0, 0, 0, 0)){
-    Serial.println("Resolution failed");
-    return false;
-  }
-
+  if (serverIP == IPAddress(0, 0, 0, 0)) return false;
   ws_url = "ws://" + serverIP.toString() + ":" + String(server_port) + "/ws";
   Serial.printf("Resolved %s\n", ws_url.c_str());
   return true;
@@ -248,8 +243,9 @@ void connectToWiFi(){
 
 // =================== Connect ===================
 void connectWS() {
-  if (ws_url.isEmpty()){
-    if (!resolveServer()) return;
+  if (ws_url.isEmpty()) {
+    Serial.printf("Resolving %s.local", server_hostname);
+    while (!resolveServer()) { delay(100); Serial.print("."); }
   }
   Serial.printf("Connecting to %s …\n", ws_url.c_str());
   client.onMessage(onMessage);
