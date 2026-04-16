@@ -12,6 +12,7 @@
 #include "FS.h"
 #include "SD_MMC.h"
 #include <Wire.h>
+#include <ws2812.h>
 #include <SparkFun_VL53L5CX_Library.h>
 
 using namespace websockets;
@@ -348,6 +349,7 @@ void goToSleep() {
   Serial.flush();
   esp_wifi_stop();
   WiFi.mode(WIFI_OFF);
+  ws2812SetColor(1);
   esp_sleep_enable_ext0_wakeup(MOTIONSENSOR_PIN, 1);
   esp_sleep_enable_timer_wakeup(20 * uS_TO_S_FACTOR);
   esp_deep_sleep_start();
@@ -386,10 +388,14 @@ void setup() {
   digitalWrite(TO_SLAVE_PIN, LOW);
   sdmmcInit();
   initEspNow();
+  ws2812Init();
+
+  ws2812SetColor(2);
 
   // ── Wake-cause guard ────────────────────────────────────────────────────
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
   if (cause == ESP_SLEEP_WAKEUP_TIMER){
+    ws2812SetColor(3);
 
     std::vector<String> flist = getSendList(SD_MMC, "/sendlist.txt");
     wakeSlave();
