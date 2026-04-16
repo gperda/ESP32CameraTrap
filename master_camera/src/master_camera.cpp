@@ -24,6 +24,8 @@ using namespace websockets;
 #define TO_SLAVE_PIN    GPIO_NUM_45
 #define TOF_SENSOR_WAIT_TIME_US 10000000
 #define MAX_SESSION_FRAMES 10
+#define MAX_WIFI_WAIT_TIME_MS 6000
+#define MAX_WS_WAIT_TIME_MS 4000
 
 // ── ToF pin / sensor settings ────────────────────────────────────────────────
 #define TOF_SDA_PIN            41
@@ -263,24 +265,35 @@ void connectToWiFi() {
   WiFi.begin(ssid, password);
   WiFi.setSleep(false);
   Serial.print("WiFi ");
-  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
-  Serial.printf(" OK  IP=%s\n", WiFi.localIP().toString().c_str());
-  if (!MDNS.begin(CAMERA_ID))
-    Serial.println("mDNS init failed");
-  else
-    Serial.printf("mDNS started. Device is %s.local\n", CAMERA_ID);
+  
+  unsigned long t = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() -t < MAX_WIFI_WAIT_TIME_MS) { delay(500); Serial.print("."); }
+  if(WiFi.status() == WL_CONNECTED){
+    Serial.printf(" OK  IP=%s\n", WiFi.localIP().toString().c_str());
+    if (!MDNS.begin(CAMERA_ID))
+      Serial.println("mDNS init failed");
+    else
+      Serial.printf("mDNS started. Device is %s.local\n", CAMERA_ID);
+  }
 }
 
 void connectWS() {
-  if (ws_url.isEmpty()) {
-    Serial.printf("Resolving %s.local", server_hostname);
-    while (!resolveServer()) { delay(100); Serial.print("."); }
+  if(WiFi.status() == WL_CONNECTED){
+    bool serverResolved = false;
+    if (ws_url.isEmpty()) {
+      Serial.printf("Resolving %s.local", server_hostname);
+      unsigned long t = millis();
+      serverResolved = resolveServer();
+      while (!serverResolved && millis() - t < MAX_WS_WAIT_TIME_MS) { delay(100); Serial.print("."); }
+    }
+    if(serverResolved){
+      Serial.printf("\nConnecting to %s …\n", ws_url.c_str());
+      client.onMessage(onMessage);
+      client.onEvent(onEvent);
+      bool ok = client.connect(ws_url.c_str());
+      if (!ok) { Serial.println("WS connection failed — will retry"); ws_url = ""; }
+    }
   }
-  Serial.printf("\nConnecting to %s …\n", ws_url.c_str());
-  client.onMessage(onMessage);
-  client.onEvent(onEvent);
-  bool ok = client.connect(ws_url.c_str());
-  if (!ok) { Serial.println("WS connection failed — will retry"); ws_url = ""; }
 }
 
 // =================== Send from SD ===================
@@ -407,24 +420,27 @@ void setup() {
     unsigned long t = millis();
     while (!(slaveReady) && millis() - t < 2000);
     esp_now_deinit();
+
     connectToWiFi();
     connectWS();
-
-
-    // // Allocate single send buffer from PSRAM
-    g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
-    if (!g_sendBuf) {
-      Serial.println("FATAL: Could not allocate send buffer in PSRAM");
-      while (true) delay(1000);
+    if(WiFi.status() == WL_CONNECTED && ws_url != ""){
+      // // Allocate single send buffer from PSRAM
+      g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
+      if (!g_sendBuf) {
+        Serial.println("FATAL: Could not allocate send buffer in PSRAM");
+        while (true) delay(1000);
+      }
+      if (!g_sendBuf) { Serial.println("Send buffer not allocated"); return; }
+      for (const String& line : flist) {
+        uint64_t value = strtoull(line.c_str(), nullptr, 10);
+        sendFromSD(value);
+      }
+      free(g_sendBuf);
+      deleteFile(SD_MMC, "/sendlist.txt");
+      removeDirRecursive(SD_MMC, "/camera");
+    } else {
+      Serial.println("WiFi currently unavailable, will send later");
     }
-    if (!g_sendBuf) { Serial.println("Send buffer not allocated"); return; }
-    for (const String& line : flist) {
-      uint64_t value = strtoull(line.c_str(), nullptr, 10);
-      sendFromSD(value);
-    }
-    free(g_sendBuf);
-    deleteFile(SD_MMC, "/sendlist.txt");
-    removeDirRecursive(SD_MMC, "/camera");
     goToSleep();
   } else if (cause != ESP_SLEEP_WAKEUP_EXT0) goToSleep();
 

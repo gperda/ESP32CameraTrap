@@ -31,6 +31,9 @@ using namespace websockets;
 #define MAX_FRAME_SIZE 228000
 #define TRIGGER_WAKEUP_PIN GPIO_NUM_21
 
+#define MAX_WS_WAIT_TIME_MS 4000
+#define MAX_WIFI_WAIT_TIME_MS 6000
+
 const char* ssid     = "Redmi Note 11S";
 const char* password = "donatella";
 
@@ -227,34 +230,44 @@ void connectToWiFi(){
   WiFi.setSleep(false);
 
   Serial.print("WiFi ");
-  while (WiFi.status() != WL_CONNECTED) {
+  unsigned long t = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() -t < MAX_WIFI_WAIT_TIME_MS) {
     delay(500);
     Serial.print(".");
   }
-  Serial.printf(" OK  IP=%s\n", WiFi.localIP().toString().c_str());
-
-  if (!MDNS.begin(CAMERA_ID)){
-    Serial.println("mDNS init failed");
-  }else{
-    Serial.printf("mDNS started. Device is %s.local\n", CAMERA_ID);
+  if(WiFi.status() == WL_CONNECTED){
+    Serial.printf(" OK  IP=%s\n", WiFi.localIP().toString().c_str());
+    if (!MDNS.begin(CAMERA_ID)){
+      Serial.println("mDNS init failed");
+    }else{
+      Serial.printf("mDNS started. Device is %s.local\n", CAMERA_ID);
+    }
   }
 }
 
 
 // =================== Connect ===================
 void connectWS() {
-  if (ws_url.isEmpty()) {
-    Serial.printf("Resolving %s.local", server_hostname);
-    while (!resolveServer()) { delay(100); Serial.print("."); }
-  }
-  Serial.printf("Connecting to %s …\n", ws_url.c_str());
-  client.onMessage(onMessage);
-  client.onEvent(onEvent);
+  if(WiFi.status() == WL_CONNECTED){
+    bool serverResolved = false;
+    if (ws_url.isEmpty()) {
+      Serial.printf("Resolving %s.local", server_hostname);
+      unsigned long t = millis();
+      serverResolved = resolveServer();
+      while (!serverResolved && millis() - t < MAX_WS_WAIT_TIME_MS) { delay(100); Serial.print("."); }
+    }
 
-  bool ok = client.connect(ws_url.c_str());
-  if (!ok) {
-    Serial.println("WS connection failed — will retry");
-    ws_url = "";
+    if(serverResolved){
+      Serial.printf("Connecting to %s …\n", ws_url.c_str());
+      client.onMessage(onMessage);
+      client.onEvent(onEvent);
+
+      bool ok = client.connect(ws_url.c_str());
+      if (!ok) {
+        Serial.println("WS connection failed — will retry");
+        ws_url = "";
+      }
+    }
   }
 }
 
@@ -451,7 +464,7 @@ void loop() {
   //   //goToSleep();
   // }
   if (shouldSend) {
-    ws2812SetColor(2);
+    ws2812SetColor(3);
     shouldSend = false;
     uint8_t ack = 0xCC;
     Serial.print("Slave ready: ");
@@ -460,21 +473,25 @@ void loop() {
     esp_now_deinit();
     connectToWiFi();
     connectWS();
-    // Allocate the single send buffer from PSRAM once at startup
-    g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
-    if (!g_sendBuf) {
-      Serial.println("FATAL: Could not allocate send buffer in PSRAM");
-      while (true) delay(1000);  // Halt — nothing will work without this
+    if(WiFi.status() == WL_CONNECTED && ws_url != ""){
+      // Allocate the single send buffer from PSRAM once at startup
+      g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
+      if (!g_sendBuf) {
+        Serial.println("FATAL: Could not allocate send buffer in PSRAM");
+        while (true) delay(1000);  // Halt — nothing will work without this
+      }
+      
+      for (const String& line : flist) {
+        uint64_t value = strtoull(line.c_str(), nullptr, 10);
+        sendFromSD(value);
+      }
+      free(g_sendBuf);
+      deleteFile(SD_MMC, "/sendlist.txt");
+      removeDirRecursive(SD_MMC, "/camera");
+      //free((void*)timestampsToSend);
+    } else {
+      Serial.println("WiFi currently unavailable, will send later");
     }
-    
-    for (const String& line : flist) {
-      uint64_t value = strtoull(line.c_str(), nullptr, 10);
-      sendFromSD(value);
-    }
-    free(g_sendBuf);
-    deleteFile(SD_MMC, "/sendlist.txt");
-    removeDirRecursive(SD_MMC, "/camera");
-    //free((void*)timestampsToSend);
     goToSleep();
   }
 }
