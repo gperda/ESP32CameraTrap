@@ -11,7 +11,7 @@ void sdmmcInit(void){
       Serial.println("No SD_MMC card attached");
       return;
   }
-  Serial.print("SD_MMC Card Type: ");
+/*   Serial.print("SD_MMC Card Type: ");
   if(cardType == CARD_MMC){
       Serial.println("MMC");
   } else if(cardType == CARD_SD){
@@ -20,11 +20,11 @@ void sdmmcInit(void){
       Serial.println("SDHC");
   } else {
       Serial.println("UNKNOWN");
-  }
+  }*/
   uint64_t cardSize = SD_MMC.cardSize() / (1024 * 1024);
-  Serial.printf("SD_MMC Card Size: %lluMB\n", cardSize);  
-  Serial.printf("Total space: %lluMB\r\n", SD_MMC.totalBytes() / (1024 * 1024));
-  Serial.printf("Used space: %lluMB\r\n", SD_MMC.usedBytes() / (1024 * 1024));
+//   Serial.printf("SD_MMC Card Size: %lluMB\n", cardSize);  
+//   Serial.printf("Total space: %lluMB\r\n", SD_MMC.totalBytes() / (1024 * 1024));
+//   Serial.printf("Used space: %lluMB\r\n", SD_MMC.usedBytes() / (1024 * 1024));
 }
 
 void listDir(fs::FS &fs, const char * dirname, uint8_t levels){
@@ -76,6 +76,36 @@ void removeDir(fs::FS &fs, const char * path){
     }
 }
 
+void removeDirRecursive(fs::FS &fs, const char* path) {
+    File dir = fs.open(path);
+    if (!dir || !dir.isDirectory()) {
+        Serial.printf("Not a directory: %s\n", path);
+        return;
+    }
+
+    // Delete all contents first
+    File entry = dir.openNextFile();
+    while (entry) {
+        String entryPath = String(path) + "/" + entry.name();
+
+        if (entry.isDirectory()) {
+            entry.close();
+            removeDirRecursive(fs, entryPath.c_str());  // recurse into subdir
+        } else {
+            entry.close();
+            if (fs.remove(entryPath.c_str())) {
+                Serial.printf("Deleted file: %s\n", entryPath.c_str());
+            } else {
+                Serial.printf("Failed to delete file: %s\n", entryPath.c_str());
+            }
+        }
+
+        entry = dir.openNextFile();
+    }
+    dir.close();
+    removeDir(SD_MMC, path);
+}
+
 void readFile(fs::FS &fs, const char * path){
     Serial.printf("Reading file: %s\n", path);
 
@@ -89,6 +119,42 @@ void readFile(fs::FS &fs, const char * path){
     while(file.available()){
         Serial.write(file.read());
     }
+}
+
+std::vector<String> getSendList(fs::FS &fs, const char* path) {
+    std::vector<String> flist;
+
+
+    // Debug: check if file exists and print card info
+    Serial.printf("Attempting to open: '%s'\n", path);
+    Serial.printf("Card type: %d\n", SD_MMC.cardType());
+    Serial.printf("Card size: %lluMB\n", SD_MMC.cardSize() / (1024 * 1024));
+
+    // List root directory to confirm file is visible
+    File root = fs.open("/");
+    File entry = root.openNextFile();
+    Serial.println("Files on SD:");
+    while (entry) {
+        Serial.printf("  - %s (%d bytes)\n", entry.name(), entry.size());
+        entry = root.openNextFile();
+    }
+
+    File file = fs.open(path);
+    if (!file) {
+        Serial.println("Failed to open file for reading");
+        return flist;  // return empty vector
+    }
+
+    while (file.available()) {
+        String line = file.readStringUntil('\n');
+        line.trim();
+        if (line.length() > 0) {
+            flist.push_back(line);
+        }
+    }
+
+    file.close();
+    return flist;  
 }
 
 void writeFile(fs::FS &fs, const char * path, const char * message){
@@ -187,7 +253,7 @@ void writejpg(fs::FS &fs, const char * path, const uint8_t *buf, size_t size){
       return;
     }
     file.write(buf, size);
-    Serial.printf("Saved file to path: %s\r\n", path);
+    //Serial.printf("Saved file to path: %s\r\n", path);
 }
 
 int readFileNum(fs::FS &fs, const char * dirname){

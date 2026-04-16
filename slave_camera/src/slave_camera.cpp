@@ -12,12 +12,11 @@
 #include <ArduinoWebsockets.h>
 #include "esp_camera.h"
 #define CAMERA_MODEL_ESP32S3_EYE
-#include "camera_pins.h"
-#include "sd_read_write.h"
+#include <camera_pins.h>
+#include <sd_read_write.h>
 #include <esp_now.h>
 #include <esp_sleep.h>
 #include <esp_wifi.h>
-#include "ws2812.h"
 #include <time.h>
 #include <ESPmDNS.h>
 #include "FS.h"
@@ -79,8 +78,8 @@ volatile bool shouldSend    = false;
 volatile bool shouldConnect = false;
 volatile bool shouldSleep   = false;
 volatile uint64_t captureTimestamp = 0;
-uint64_t* timestampsToSend = nullptr;
-volatile uint64_t framesCount = 0;
+// uint64_t* timestampsToSend = nullptr;
+// volatile uint64_t framesCount = 0;
 
 struct_message out_msg;
 struct_message in_msg;
@@ -214,10 +213,10 @@ void onReceive(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
         shouldSleep = true;
     } else if (pkt.type == 0x04){
         shouldSend = true;
-        framesCount = pkt.framesCount;
-        timestampsToSend = (uint64_t*)ps_malloc(framesCount * sizeof(uint64_t));
-        if (timestampsToSend == nullptr) return; 
-        memcpy(timestampsToSend, data + sizeof(SyncPacket), framesCount * sizeof(uint64_t));
+        // framesCount = pkt.framesCount;
+        // timestampsToSend = (uint64_t*)ps_malloc(framesCount * sizeof(uint64_t));
+        // if (timestampsToSend == nullptr) return; 
+        // memcpy(timestampsToSend, data + sizeof(SyncPacket), framesCount * sizeof(uint64_t));
     }
 }
 
@@ -362,8 +361,22 @@ int captureToSD(uint64_t timestamp) {
   writejpg(SD_MMC, path.c_str(), fb->buf, fb->len);
   Serial.printf("Saved %u bytes → %s\n", fb->len, path.c_str());
 
+  String message = String(timestamp) + "\n";
+  appendFile(SD_MMC, "/sendlist.txt", message.c_str());
+
   esp_camera_fb_return(fb);  // Return immediately after write
   return 1;
+}
+
+void goToSleep() {
+  Serial.println("Going to sleep");
+  Serial.flush();
+
+  esp_wifi_stop();
+  WiFi.mode(WIFI_OFF);
+
+  esp_sleep_enable_ext0_wakeup(TRIGGER_WAKEUP_PIN, 1);
+  esp_deep_sleep_start();
 }
 
 void initEspNow() {
@@ -388,16 +401,7 @@ void initEspNow() {
   }
 }
 
-void goToSleep() {
-  Serial.println("Going to sleep");
-  Serial.flush();
 
-  esp_wifi_stop();
-  WiFi.mode(WIFI_OFF);
-
-  esp_sleep_enable_ext0_wakeup(TRIGGER_WAKEUP_PIN, 1);
-  esp_deep_sleep_start();
-}
 
 // =================== Arduino Setup ===================
 void setup() {
@@ -413,9 +417,7 @@ void setup() {
   }
   initEspNow();
   sdmmcInit();
-  //removeDir(SD_MMC, "/camera");
   createDir(SD_MMC, "/camera");
-  initCamera();
 
 
 }
@@ -424,6 +426,7 @@ void setup() {
 void loop() {
   if (shouldCapture) {
     shouldCapture = false;
+    initCamera();
     //Serial.printf("Sync timestamp: %llu us\n", captureTimestamp);
     uint8_t ack = 0xCC;
     Serial.print("Slave ready: ");
@@ -445,6 +448,10 @@ void loop() {
   // }
   if (shouldSend) {
     shouldSend = false;
+    uint8_t ack = 0xCC;
+    Serial.print("Slave ready: ");
+    esp_now_send(masterMAC, &ack, 1);
+    std::vector<String> flist = getSendList(SD_MMC, "/sendlist.txt");
     esp_now_deinit();
     connectToWiFi();
     connectWS();
@@ -454,11 +461,15 @@ void loop() {
       Serial.println("FATAL: Could not allocate send buffer in PSRAM");
       while (true) delay(1000);  // Halt — nothing will work without this
     }
-    Serial.printf("Send buffer allocated: %u bytes\n", sizeof(Header) + MAX_FRAME_SIZE);
     
-    for(int i=0;i<framesCount;i++)
-        sendFromSD(timestampsToSend[i]);
-    free((void*)timestampsToSend);
+    for (const String& line : flist) {
+      uint64_t value = strtoull(line.c_str(), nullptr, 10);
+      sendFromSD(value);
+    }
+    free(g_sendBuf);
+    deleteFile(SD_MMC, "/sendlist.txt");
+    removeDirRecursive(SD_MMC, "/camera");
+    //free((void*)timestampsToSend);
     goToSleep();
   }
 }

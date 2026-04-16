@@ -1,1 +1,14 @@
+#PlatformIO
+master_camera/.pio
+slave_camera/.pio
+
+# VSCode
+master_camera/.vscode
+slave_camera/.vscode
+
+# Node (if using any JS tooling)
 node_modules
+
+# OS files
+.DS_Store
+Thumbs.db
