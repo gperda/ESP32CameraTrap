@@ -146,30 +146,64 @@
     .view .ph { color: #444; font-size: 1.1rem; }
     .view .ph.hide { display: none; }
 
-    /* ── List rows ── */
-    .list {
-      padding: 10px 14px;
-      background: rgba(255,255,255,0.02);
-      max-height: 180px;
-      overflow: auto;
+    /* ── Pair list ── */
+    .pair-section {
+      margin: 0 20px 20px;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--card);
+    }
+    .pair-section-header {
+      background: var(--border);
+      padding: 8px 18px;
       font-size: 0.85rem;
-      color: var(--muted);
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: 0.5px;
+    }
+    .pair-list {
+      padding: 8px 12px;
+      max-height: 240px;
+      overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 5px;
     }
-    .list-row {
-      padding: 8px 10px;
+    .pair-row {
+      padding: 7px 10px;
       border-radius: 8px;
       background: rgba(0,0,0,0.12);
       display: flex;
-      justify-content: space-between;
-      gap: 12px;
       align-items: center;
-      color: var(--text);
+      gap: 10px;
+      cursor: pointer;
+      transition: background .15s;
     }
-    .list-row .time { color: #9aa; font-size: 0.78rem; }
-    .list-row .meta { color: var(--muted); font-size: 0.82rem; }
+    .pair-row:hover  { background: rgba(255,255,255,0.07); }
+    .pair-row.active { background: rgba(233,69,96,0.18); outline: 1px solid var(--accent); }
+    .pair-row .pair-ts { font-size: 0.78rem; color: #9aa; min-width: 100px; flex-shrink: 0; }
+    .cam-badge {
+      font-size: 0.75rem;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.08);
+      color: var(--text);
+      white-space: nowrap;
+    }
+    .cam-badge.missing { color: var(--muted); background: rgba(255,255,255,0.03); font-style: italic; }
+    .btn-pair-dl {
+      margin-left: auto;
+      padding: 3px 9px;
+      font-size: 0.75rem;
+      border-radius: 6px;
+      background: var(--border);
+      color: var(--text);
+      border: 1px solid #2a4a7a;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .btn-pair-dl:hover { background: #1a3060; }
 
     /* ── Footer stats (original) ── */
     .stats {
@@ -444,7 +478,6 @@
       <img id="img2" alt="Camera 2" />
       <div class="ph" id="ph2">Waiting for Camera 2 …</div>
     </div>
-    <div class="list" id="list2"></div>
   </div>
 
   <!-- Camera 1 -->
@@ -457,8 +490,12 @@
       <img id="img1" alt="Camera 1" />
       <div class="ph" id="ph1">Waiting for Camera 1 …</div>
     </div>
-    <div class="list" id="list1"></div>
   </div>
+</div>
+
+<div class="pair-section">
+  <div class="pair-section-header">Captured Pairs</div>
+  <div class="pair-list" id="pairList"></div>
 </div>
 
 <div class="stats" id="stats">Connecting …</div>
@@ -556,38 +593,18 @@
      ════════════════════════════════════════════════════════════ -->
 <script>
 // ─────────────────────────────────────────────────────────────
-// ORIGINAL CODE — preserved exactly; only one bug fixed:
-// RowList instances are created once, not inside the message handler.
+// ORIGINAL CODE — preserved exactly
 // ─────────────────────────────────────────────────────────────
-
-class RowList {
-  constructor(container, { maxRows = 200 } = {}) {
-    this.container = container;
-    this.maxRows = maxRows;
-  }
-  add(timeText, metaText) {
-    const row = document.createElement('div');
-    row.className = 'list-row';
-    const time = document.createElement('div');
-    time.className = 'time';
-    time.textContent = timeText;
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    meta.textContent = metaText;
-    row.appendChild(time);
-    row.appendChild(meta);
-    this.container.insertBefore(row, this.container.firstChild);
-    while (this.container.children.length > this.maxRows) {
-      this.container.removeChild(this.container.lastChild);
-    }
-  }
-  clear() { this.container.innerHTML = ''; }
-}
 
 /* ── state ── */
 let ws;
 let reconnectTimer;
 const frames = { cam1: 0, cam2: 0 };
+
+// Pair list state
+const pairMap     = new Map();   // tsStr → { cam1, cam2, rowEl, badge1El, badge2El }
+const MAX_PAIRS   = 300;
+let   displayedTs = null;        // timestamp of the currently active pair row
 
 /* ── elements ── */
 const $dotServer = document.getElementById('dotServer');
@@ -596,12 +613,6 @@ const $dotCam2   = document.getElementById('dotCam2');
 const $btnStart  = document.getElementById('btnStart');
 const $btnStop   = document.getElementById('btnStop');
 const $stats     = document.getElementById('stats');
-const $list1     = document.getElementById('list1');
-const $list2     = document.getElementById('list2');
-
-// Fixed: instantiate once, not on every message
-const list1 = new RowList($list1, { maxRows: 300 });
-const list2 = new RowList($list2, { maxRows: 300 });
 
 /* ── helpers ── */
 function send(msg) {
@@ -678,10 +689,7 @@ function connect() {
     frames[camId] = (frames[camId] || 0) + 1;
     const sizeKB = (jpeg.length / 1024).toFixed(1) + ' KB';
     meta.textContent = `${sizeKB} KB  ·  #${frames[camId]}`;
-    const rowMeta = `#${frames[camId]} · ${sizeKB}`;
-
-    if (camId === 'cam1') list1.add(tsStr, rowMeta);
-    else if (camId === 'cam2') list2.add(tsStr, rowMeta);
+    addOrUpdatePair(tsStr, camId, jpeg, frames[camId], sizeKB);
 
     $stats.textContent =
       `Frames — Cam1: ${frames.cam1}  |  Cam2: ${frames.cam2}  |  Total: ${frames.cam1 + frames.cam2}`;
@@ -700,6 +708,112 @@ function connect() {
 
 connect();
 
+// ─────────────────────────────────────────────────────────────
+// PAIR LIST HELPERS
+// ─────────────────────────────────────────────────────────────
+
+function formatTs(tsStr) {
+  const n = Number(tsStr);
+  if (!isNaN(n)) {
+    if (tsStr.length >= 16) return new Date(Math.floor(n / 1000)).toLocaleTimeString();  // µs epoch
+    if (tsStr.length === 13) return new Date(n).toLocaleTimeString();                    // ms epoch
+  }
+  return tsStr.length > 10 ? '\u2026' + tsStr.slice(-10) : tsStr;
+}
+
+function addOrUpdatePair(tsStr, camId, jpeg, frameNum, sizeKB) {
+  const blob = new Blob([jpeg], { type: 'image/jpeg' });
+
+  if (!pairMap.has(tsStr)) {
+    // Evict oldest row when at capacity
+    if (pairMap.size >= MAX_PAIRS) {
+      const oldestKey = pairMap.keys().next().value;
+      const oldEntry  = pairMap.get(oldestKey);
+      pairMap.delete(oldestKey);
+      oldEntry.rowEl.remove();
+    }
+
+    const rowEl    = document.createElement('div');
+    rowEl.className = 'pair-row';
+
+    const tsSpan   = document.createElement('span');
+    tsSpan.className   = 'pair-ts';
+    tsSpan.textContent = formatTs(tsStr);
+
+    const badge1El = document.createElement('span');
+    badge1El.className   = 'cam-badge missing';
+    badge1El.textContent = 'Cam 1: —';
+
+    const badge2El = document.createElement('span');
+    badge2El.className   = 'cam-badge missing';
+    badge2El.textContent = 'Cam 2: —';
+
+    const dlBtn = document.createElement('button');
+    dlBtn.className   = 'btn-pair-dl';
+    dlBtn.title       = 'Download both images';
+    dlBtn.textContent = '\u2b07';
+    dlBtn.addEventListener('click', e => { e.stopPropagation(); downloadPair(tsStr); });
+
+    rowEl.appendChild(tsSpan);
+    rowEl.appendChild(badge1El);
+    rowEl.appendChild(badge2El);
+    rowEl.appendChild(dlBtn);
+    rowEl.addEventListener('click', () => showPair(tsStr));
+
+    const $pairList = document.getElementById('pairList');
+    $pairList.insertBefore(rowEl, $pairList.firstChild);
+
+    pairMap.set(tsStr, { cam1: null, cam2: null, rowEl, badge1El, badge2El });
+  }
+
+  const entry   = pairMap.get(tsStr);
+  entry[camId]  = { blob, sizeKB, frameNum };
+
+  const badgeEl = camId === 'cam1' ? entry.badge1El : entry.badge2El;
+  badgeEl.textContent = `Cam ${camId === 'cam1' ? '1' : '2'}: ${sizeKB}`;
+  badgeEl.classList.remove('missing');
+}
+
+function showPair(tsStr) {
+  if (displayedTs) {
+    const prev = pairMap.get(displayedTs);
+    if (prev) prev.rowEl.classList.remove('active');
+  }
+  displayedTs = tsStr;
+  const entry = pairMap.get(tsStr);
+  if (!entry) return;
+  entry.rowEl.classList.add('active');
+
+  for (const camId of ['cam1', 'cam2']) {
+    const num    = camId === 'cam1' ? '1' : '2';
+    const imgEl  = document.getElementById('img'  + num);
+    const phEl   = document.getElementById('ph'   + num);
+    const metaEl = document.getElementById('meta' + num);
+    if (!imgEl || !entry[camId]) continue;
+    const url = URL.createObjectURL(entry[camId].blob);
+    if (imgEl.src.startsWith('blob:')) URL.revokeObjectURL(imgEl.src);
+    imgEl.src = url;
+    imgEl.classList.add('show');
+    phEl.classList.add('hide');
+    metaEl.textContent = `${entry[camId].sizeKB}  ·  #${entry[camId].frameNum}`;
+  }
+}
+
+function downloadPair(tsStr) {
+  const entry = pairMap.get(tsStr);
+  if (!entry) return;
+  for (const camId of ['cam1', 'cam2']) {
+    if (!entry[camId]) continue;
+    const url = URL.createObjectURL(entry[camId].blob);
+    const a   = document.createElement('a');
+    a.href     = url;
+    a.download = `${camId}_${tsStr}.jpg`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }
+}
 
 // ─────────────────────────────────────────────────────────────
 // ToF VISUALIZER  ·  new code below

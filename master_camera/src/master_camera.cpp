@@ -22,6 +22,7 @@ using namespace websockets;
 #define MAX_FRAME_SIZE  228000
 #define MOTIONSENSOR_PIN GPIO_NUM_19
 #define TO_SLAVE_PIN    GPIO_NUM_45
+#define TOF_SENSOR_PIN GPIO_NUM_47
 #define TOF_SENSOR_WAIT_TIME_US 10000000
 #define MAX_SESSION_FRAMES 10
 #define MAX_WIFI_WAIT_TIME_MS 6000
@@ -363,6 +364,7 @@ void goToSleep() {
   esp_wifi_stop();
   WiFi.mode(WIFI_OFF);
   ws2812SetColor(1);
+  digitalWrite(TOF_SENSOR_PIN, LOW);
   esp_sleep_enable_ext0_wakeup(MOTIONSENSOR_PIN, 1);
   esp_sleep_enable_timer_wakeup(20 * uS_TO_S_FACTOR);
   esp_deep_sleep_start();
@@ -399,6 +401,7 @@ void setup() {
 
   pinMode(TO_SLAVE_PIN, OUTPUT);
   digitalWrite(TO_SLAVE_PIN, LOW);
+  pinMode(TOF_SENSOR_PIN, OUTPUT);
   sdmmcInit();
   initEspNow();
   ws2812Init();
@@ -446,8 +449,9 @@ void setup() {
 
   initCamera();
   createDir(SD_MMC, "/camera");
+  digitalWrite(TOF_SENSOR_PIN, HIGH);
 
-  tofInitialised = initToF();
+   tofInitialised = initToF();
 
   uint64_t startTime   = esp_timer_get_time();
   uint64_t elapsedTime = 0;
