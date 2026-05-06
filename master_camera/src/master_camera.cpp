@@ -19,7 +19,7 @@ using namespace websockets;
 
 // =================== CONFIGURATION ===================
 #define CAMERA_ID       "cam1"   // "cam1" for board 1, "cam2" for board 2
-#define MAX_FRAME_SIZE  228000
+#define MAX_FRAME_SIZE  1048576
 #define MOTIONSENSOR_PIN GPIO_NUM_19
 #define TO_SLAVE_PIN    GPIO_NUM_45
 #define TOF_SENSOR_PIN GPIO_NUM_47
@@ -175,8 +175,8 @@ int initCamera(void) {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn     = PWDN_GPIO_NUM;
   config.pin_reset    = RESET_GPIO_NUM;
-  config.xclk_freq_hz   = 10000000;
-  config.frame_size     = FRAMESIZE_UXGA;
+  config.xclk_freq_hz   = 8000000;
+  config.frame_size     = FRAMESIZE_5MP;
   config.pixel_format   = PIXFORMAT_JPEG;
   config.grab_mode      = CAMERA_GRAB_WHEN_EMPTY;
   config.fb_location    = CAMERA_FB_IN_PSRAM;
@@ -184,7 +184,7 @@ int initCamera(void) {
   config.fb_count       = 1;
 
   if (psramFound()) {
-    config.jpeg_quality = 10;
+    config.jpeg_quality = 5;
     config.fb_count     = 2;
     config.grab_mode    = CAMERA_GRAB_LATEST;
   } else {
@@ -199,7 +199,7 @@ int initCamera(void) {
   }
 
   sensor_t* s = esp_camera_sensor_get();
-  s->set_vflip(s, 1);
+  //s->set_vflip(s, 1);
   s->set_brightness(s, 1);
   s->set_saturation(s, 0);
 
@@ -285,7 +285,7 @@ void connectWS() {
       Serial.printf("Resolving %s.local", server_hostname);
       unsigned long t = millis();
       serverResolved = resolveServer();
-      while (!serverResolved && millis() - t < MAX_WS_WAIT_TIME_MS) { delay(100); Serial.print("."); }
+      while (!serverResolved && millis() - t < MAX_WS_WAIT_TIME_MS) { delay(500); Serial.print("."); }
     }
     if(serverResolved){
       Serial.printf("\nConnecting to %s …\n", ws_url.c_str());
@@ -451,7 +451,7 @@ void setup() {
   createDir(SD_MMC, "/camera");
   digitalWrite(TOF_SENSOR_PIN, HIGH);
 
-   tofInitialised = initToF();
+  tofInitialised = initToF();
 
   uint64_t startTime   = esp_timer_get_time();
   uint64_t elapsedTime = 0;

@@ -28,7 +28,7 @@ using namespace websockets;
 
 // =================== CONFIGURATION ===================
 #define CAMERA_ID "cam2"   // ← This is the only difference from cam1
-#define MAX_FRAME_SIZE 228000
+#define MAX_FRAME_SIZE 1048576
 #define TRIGGER_WAKEUP_PIN GPIO_NUM_21
 
 #define MAX_WS_WAIT_TIME_MS 4000
@@ -110,8 +110,8 @@ int initCamera(void) {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 10000000;
-  config.frame_size = FRAMESIZE_UXGA;
+  config.xclk_freq_hz = 16000000;
+  config.frame_size = FRAMESIZE_5MP;
   config.pixel_format = PIXFORMAT_JPEG; // for streaming
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
   config.fb_location = CAMERA_FB_IN_PSRAM;
@@ -121,7 +121,7 @@ int initCamera(void) {
   // if PSRAM IC present, init with UXGA resolution and higher JPEG quality
   // for larger pre-allocated frame buffer.
   if(psramFound()){
-    config.jpeg_quality = 10;
+    config.jpeg_quality = 5;
     config.fb_count = 2;
     config.grab_mode = CAMERA_GRAB_LATEST;
   } else {
@@ -141,7 +141,7 @@ int initCamera(void) {
 
   sensor_t * s = esp_camera_sensor_get();
   // // initial sensors are flipped vertically and colors are a bit saturated
-  s->set_vflip(s, 1); // flip it back
+  //s->set_vflip(s, 1); // flip it back
   s->set_brightness(s, 1); // up the brightness just a bit
   s->set_saturation(s, 0); // lower the saturation
   delay(1000);
@@ -254,7 +254,7 @@ void connectWS() {
       Serial.printf("Resolving %s.local", server_hostname);
       unsigned long t = millis();
       serverResolved = resolveServer();
-      while (!serverResolved && millis() - t < MAX_WS_WAIT_TIME_MS) { delay(100); Serial.print("."); }
+      while (!serverResolved && millis() - t < MAX_WS_WAIT_TIME_MS) { delay(500); Serial.print("."); }
     }
 
     if(serverResolved){
