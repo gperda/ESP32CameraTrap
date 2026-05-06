@@ -15,12 +15,75 @@ const express = require('express');
 const http    = require('http');
 const WebSocket = require('ws');
 const path    = require('path');
-const { buffer } = require('stream/consumers');
+const { spawnSync } = require('child_process');
+const crypto  = require('crypto');
+const fs      = require('fs');
+const os      = require('os');
+const multer  = require('multer');
 
 // ─── Express static file server ───
 const app    = express();
 const server = http.createServer(app);
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ─── Stereo depth map endpoint ────────────────────────────────────────────────
+const upload     = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const DEPTHMAP_PY = path.join(__dirname, 'depthmap.py');
+const CALIB_JSON  = path.join(__dirname, 'calibration.json');
+
+app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 'cam2', maxCount: 1 }]), (req, res) => {
+  const files = req.files;
+  if (!files || !files.cam1 || !files.cam2) {
+    return res.status(400).json({ error: 'Both cam1 and cam2 files are required' });
+  }
+
+  // Write uploaded buffers to unique temp files
+  const id      = crypto.randomUUID();
+  const tmpDir  = os.tmpdir();
+  const img1    = path.join(tmpDir, `${id}_cam1.jpg`);
+  const img2    = path.join(tmpDir, `${id}_cam2.jpg`);
+  const outPng  = path.join(tmpDir, `${id}_depth.png`);
+
+  const cleanup = () => {
+    for (const f of [img1, img2, outPng]) {
+      try { fs.unlinkSync(f); } catch { /* already gone */ }
+    }
+  };
+
+  try {
+    fs.writeFileSync(img1, files.cam1[0].buffer);
+    fs.writeFileSync(img2, files.cam2[0].buffer);
+  } catch (e) {
+    cleanup();
+    return res.status(500).json({ error: 'Failed to write temp files: ' + e.message });
+  }
+
+  const args = [DEPTHMAP_PY, img1, img2, outPng];
+  if (fs.existsSync(CALIB_JSON)) args.push(CALIB_JSON);
+
+  const result = spawnSync('python3', args, { timeout: 60_000, encoding: 'utf8' });
+
+  if (result.error) {
+    cleanup();
+    return res.status(500).json({ error: 'Failed to spawn python3: ' + result.error.message });
+  }
+
+  let pyOut = {};
+  try { pyOut = JSON.parse((result.stdout || '').trim()); } catch { /* ignore */ }
+
+  if (result.status !== 0 || !pyOut.success) {
+    cleanup();
+    const errMsg = pyOut.error || result.stderr || 'depthmap.py failed';
+    console.error('[depthmap]', errMsg);
+    return res.status(500).json({ error: errMsg });
+  }
+
+  console.log(`[depthmap] ${pyOut.calibrated ? 'calibrated' : 'uncalibrated'} depth map written to ${outPng}`);
+  res.download(outPng, 'depthmap.png', (err) => {
+    cleanup();
+    if (err && !res.headersSent) res.status(500).json({ error: 'Download failed' });
+  });
+});
 
 // ─── WebSocket server on /ws ───
 const wss = new WebSocket.Server({ server, path: '/ws' });

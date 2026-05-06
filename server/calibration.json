@@ -1,0 +1,21 @@
+{
+  "_comment": "Fill in your real calibration values and remove this comment. All units in pixels (K) and mm (baseline). Run single-camera calibration (chessboard) for K/D values.",
+
+  "K1": [
+    [600.0,   0.0, 320.0],
+    [  0.0, 600.0, 240.0],
+    [  0.0,   0.0,   1.0]
+  ],
+  "D1": [0.0, 0.0, 0.0, 0.0, 0.0],
+
+  "K2": [
+    [600.0,   0.0, 320.0],
+    [  0.0, 600.0, 240.0],
+    [  0.0,   0.0,   1.0]
+  ],
+  "D2": [0.0, 0.0, 0.0, 0.0, 0.0],
+
+  "baseline": 65.0,
+
+  "_optional_comment": "Add R (3x3 rotation matrix) and T ([tx,ty,tz] translation) only if you have run cv2.stereoCalibrate. If omitted, R=identity and T=[baseline,0,0] are assumed (cameras treated as perfectly parallel)."
+}
