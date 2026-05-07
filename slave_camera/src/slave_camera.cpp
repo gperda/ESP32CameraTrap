@@ -408,7 +408,7 @@ void initEspNow() {
 
   esp_now_peer_info_t peer = {};
   memcpy(peer.peer_addr, masterMAC, 6);
-  peer.channel = 0;
+  peer.channel = 1;
   peer.encrypt = false;
   if (esp_now_add_peer(&peer) != ESP_OK){
     Serial.println("Failed to add peer");

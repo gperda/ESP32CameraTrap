@@ -379,7 +379,7 @@ void initEspNow() {
   esp_now_register_recv_cb(esp_now_recv_cb_t(onReceive));
   esp_now_peer_info_t peer = {};
   memcpy(peer.peer_addr, slaveMAC, 6);
-  peer.channel = 0;
+  peer.channel = 1;
   peer.encrypt = false;
   if (esp_now_add_peer(&peer) != ESP_OK) { Serial.println("Failed to add peer"); goToSleep(); }
 }
