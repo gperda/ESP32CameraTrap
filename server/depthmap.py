@@ -33,14 +33,14 @@ import cv2
 
 # ── SGBM parameters — tune these for your baseline / resolution ──────────────
 MIN_DISPARITY   = 0
-NUM_DISPARITIES = 64     # must be divisible by 16
-BLOCK_SIZE      = 5      # odd, 3–11 recommended
+NUM_DISPARITIES = 16     # must be divisible by 16
+BLOCK_SIZE      = 5      # odd, 3–11 recommendedster
 P1              = 8  * 3 * BLOCK_SIZE ** 2
 P2              = 32 * 3 * BLOCK_SIZE ** 2
 DISP12_MAX_DIFF = 1
 UNIQUENESS_RATIO     = 10
 SPECKLE_WINDOW_SIZE  = 100
-SPECKLE_RANGE        = 32
+SPECKLE_RANGE        = 10
 
 # Maximum long-edge size to process (resize if larger, for speed)
 MAX_PROCESS_DIM = 800
@@ -98,7 +98,7 @@ def compute_disparity(left_gray, right_gray):
         uniquenessRatio    = UNIQUENESS_RATIO,
         speckleWindowSize  = SPECKLE_WINDOW_SIZE,
         speckleRange       = SPECKLE_RANGE,
-        mode               = cv2.STEREO_SGBM_MODE_SGBM_3WAY,
+        mode               = cv2.STEREO_SGBM_MODE_HH,
     )
     return sgbm.compute(left_gray, right_gray)
 
