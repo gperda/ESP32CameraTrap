@@ -237,7 +237,7 @@ void onMessage(WebsocketsMessage msg) {
     String data = msg.data();
     Serial.printf("← %s\n", data.c_str());
     if (data == "capture")    shouldCapture = true;
-    if (data == "ota_update") { otaRequested = true; otaPendingRTC = true; slaveOtaPendingRTC = true; }
+    if (data == "ota_update") { Serial.println("Received ota update"); otaRequested = true; otaPendingRTC = true; slaveOtaPendingRTC = true; }
   }
 }
 
@@ -568,8 +568,12 @@ void setup() {
   // ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram());
     connectWS();
     // Allow the server's ota_update command to arrive before the send loop
-    client.poll();
-    delay(500);
+    Serial.println("Polling");
+    unsigned long pollEnd = millis() + 1000;
+    while (millis() < pollEnd) {
+      client.poll();
+      delay(10);
+    }
     if(WiFi.status() == WL_CONNECTED && ws_url != ""){
       // // Allocate single send buffer from PSRAM
       g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
