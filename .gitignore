@@ -13,4 +13,4 @@ node_modules
 .DS_Store
 Thumbs.db
 
-.esp32venv
+.esp32venv/
