@@ -1,0 +1,46 @@
+name: Build and Release Firmware
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build master_camera
+        run: |
+          cd master_camera
+          pio run
+          cp .pio/build/freenove_esp32_s3_wroom/firmware.bin ../master_camera.bin
+
+      - name: Build slave_camera
+        run: |
+          cd slave_camera
+          pio run
+          cp .pio/build/freenove_esp32_s3_wroom/firmware.bin ../slave_camera.bin
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          files: |
+            master_camera.bin
+            slave_camera.bin
+            versions.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

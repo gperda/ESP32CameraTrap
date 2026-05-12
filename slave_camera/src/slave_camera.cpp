@@ -23,12 +23,19 @@
 #include "FS.h"
 #include "SD_MMC.h"
 #include "driver/rtc_io.h"
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <HTTPUpdate.h>
+#include <ArduinoJson.h>
 
 using namespace websockets;
 
 // =================== CONFIGURATION ===================
 #define CAMERA_ID "cam2"   // ← This is the only difference from cam1
 #define MAX_FRAME_SIZE 1048576
+#define FIRMWARE_VERSION  "v1.0.0"
+#define FIRMWARE_DEVICE   "slave_camera"
+#define GITHUB_REPO       "gperda/ESP32CameraTrap"
 #define TRIGGER_WAKEUP_PIN GPIO_NUM_21
 
 #define MAX_WS_WAIT_TIME_MS 4000
@@ -85,6 +92,9 @@ volatile bool shouldSend    = false;
 volatile bool shouldConnect = false;
 volatile bool shouldSleep   = false;
 volatile uint64_t captureTimestamp = 0;
+
+RTC_DATA_ATTR bool otaPendingRTC = false;
+volatile bool shouldOTA = false;
 // uint64_t* timestampsToSend = nullptr;
 // volatile uint64_t framesCount = 0;
 
@@ -225,6 +235,9 @@ void onReceive(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
         // timestampsToSend = (uint64_t*)ps_malloc(framesCount * sizeof(uint64_t));
         // if (timestampsToSend == nullptr) return; 
         // memcpy(timestampsToSend, data + sizeof(SyncPacket), framesCount * sizeof(uint64_t));
+    } else if (pkt.type == 0x05) {
+        shouldOTA     = true;
+        otaPendingRTC = true;
     }
 }
 
@@ -422,6 +435,96 @@ void initEspNow() {
 
 
 
+// =================== OTA Update ===================
+bool performOTAIfAvailable() {
+  Serial.printf("[OTA] %s @ %s\n", FIRMWARE_DEVICE, FIRMWARE_VERSION);
+
+  WiFiClientSecure apiClient;
+  apiClient.setInsecure();
+  HTTPClient http;
+  String releaseUrl = "https://api.github.com/repos/" + String(GITHUB_REPO) + "/releases/latest";
+  http.begin(apiClient, releaseUrl);
+  http.addHeader("User-Agent", "ESP32");
+  http.addHeader("Accept", "application/vnd.github+json");
+
+  int code = http.GET();
+  if (code != 200) {
+    Serial.printf("[OTA] GitHub API returned %d\n", code);
+    http.end();
+    return false;
+  }
+
+  JsonDocument filter;
+  filter["assets"][0]["name"]                 = true;
+  filter["assets"][0]["browser_download_url"] = true;
+
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, http.getStream(),
+                                             DeserializationOption::Filter(filter));
+  http.end();
+  if (err) { Serial.printf("[OTA] JSON parse error: %s\n", err.c_str()); return false; }
+
+  String versionsUrl, binUrl;
+  for (JsonObject asset : doc["assets"].as<JsonArray>()) {
+    const char* name = asset["name"];
+    if (name && strcmp(name, "versions.json") == 0)
+      versionsUrl = asset["browser_download_url"].as<String>();
+    if (name && strcmp(name, FIRMWARE_DEVICE ".bin") == 0)
+      binUrl = asset["browser_download_url"].as<String>();
+  }
+  if (versionsUrl.isEmpty() || binUrl.isEmpty()) {
+    Serial.println("[OTA] Required assets not found in release");
+    return false;
+  }
+
+  WiFiClientSecure verClient;
+  verClient.setInsecure();
+  HTTPClient verHttp;
+  verHttp.begin(verClient, versionsUrl);
+  verHttp.addHeader("User-Agent", "ESP32");
+  code = verHttp.GET();
+  if (code != 200) {
+    Serial.printf("[OTA] versions.json fetch returned %d\n", code);
+    verHttp.end();
+    return false;
+  }
+
+  JsonDocument verDoc;
+  err = deserializeJson(verDoc, verHttp.getStream());
+  verHttp.end();
+  if (err) { Serial.printf("[OTA] versions.json parse error: %s\n", err.c_str()); return false; }
+
+  const char* remoteVersion = verDoc[FIRMWARE_DEVICE].as<const char*>();
+  if (!remoteVersion) { Serial.println("[OTA] Device key not found in versions.json"); return false; }
+  Serial.printf("[OTA] Remote: %s  Local: %s\n", remoteVersion, FIRMWARE_VERSION);
+  if (strcmp(remoteVersion, FIRMWARE_VERSION) == 0) {
+    Serial.println("[OTA] Already up to date");
+    return false;
+  }
+
+  Serial.printf("[OTA] Updating %s → %s\n", FIRMWARE_VERSION, remoteVersion);
+  WiFiClientSecure binClient;
+  binClient.setInsecure();
+  httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  httpUpdate.rebootOnUpdate(false);
+
+  t_httpUpdate_return result = httpUpdate.update(binClient, binUrl);
+  switch (result) {
+    case HTTP_UPDATE_OK:
+      Serial.println("[OTA] Flash OK");
+      return true;
+    case HTTP_UPDATE_FAILED:
+      Serial.printf("[OTA] Flash FAILED: (%d) %s\n",
+                    httpUpdate.getLastError(),
+                    httpUpdate.getLastErrorString().c_str());
+      return false;
+    case HTTP_UPDATE_NO_UPDATES:
+      Serial.println("[OTA] No update reported");
+      return false;
+  }
+  return false;
+}
+
 // =================== Arduino Setup ===================
 void setup() {
   Serial.begin(115200);
@@ -440,7 +543,8 @@ void setup() {
   createDir(SD_MMC, "/camera");
   ws2812SetColor(2);
 
-
+  // Resume OTA that was interrupted by WiFi failure on a prior wakeup
+  if (otaPendingRTC) { shouldOTA = true; }
 }
 
 // =================== Arduino Loop ===================
@@ -457,15 +561,27 @@ void loop() {
     goToSleep(); //if images are stored and sent later
   } 
   // if (shouldConnect) {
-  //   esp_now_deinit();
-  //   connectToWiFi();
-  //   connectWS();
-  //   shouldConnect = false;
-  //   // ACK esp_now_send()
-  //   //esp_now_deinit();   // free the radio before switching to full WiFi
-  //   //startWifiAndSend();
-  //   //esp_now_deinit(); // Cam1 wakes cam2 over pin
-  //   //goToSleep();
+  if (shouldOTA) {
+    ws2812SetColor(3);
+    shouldOTA = false;
+    uint8_t ack = 0xCC;
+    Serial.print("Slave OTA ready: ");
+    esp_now_send(masterMAC, &ack, 1);   // ACK before slow work — same as shouldSend
+    esp_now_deinit();
+    connectToWiFi();
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("[OTA] WiFi unavailable, will retry on next wakeup");
+      goToSleep();
+    }
+    if (performOTAIfAvailable()) {
+      otaPendingRTC = false;
+      ESP.restart();
+    }
+    // on failure: otaPendingRTC stays true, retries next wakeup
+    goToSleep();
+  }
+  // if (shouldConnect) {
+  //   ...
   // }
   if (shouldSend) {
     ws2812SetColor(3);

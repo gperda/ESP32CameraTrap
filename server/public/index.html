@@ -97,6 +97,12 @@
     .btn-snap  { background: var(--accent); color: #fff; }
     .btn-start { background: var(--green);  color: #fff; }
     .btn-stop  { background: #ff9800;       color: #fff; }
+    .btn-ota   { background: #673ab7;       color: #fff; }
+    .btn-ota.queued {
+      background: #f57c00;
+      animation: otaPulse 1.5s ease-in-out infinite alternate;
+    }
+    @keyframes otaPulse { from { opacity: 0.75; } to { opacity: 1; } }
 
     /* ── Camera grid ── */
     .cameras {
@@ -538,6 +544,7 @@
   <button class="btn-snap"  onclick="send('trigger_capture')">📸 Capture Now</button>
   <button class="btn-start" id="btnStart" onclick="send('start_auto')">▶ Start Auto</button>
   <button class="btn-stop"  id="btnStop"  onclick="send('stop_auto')">⏹ Stop Auto</button>
+  <button class="btn-ota"   id="btnOta"   onclick="send('request_ota')">⬆ OTA Update</button>
 </div>
 
 <div class="cameras">
@@ -734,6 +741,13 @@ function connect() {
         setDot($dotCam2, m.cameras.includes('cam2') ? 'on-green' : null);
         $btnStart.style.opacity = m.captureActive ? 0.45 : 1;
         $btnStop.style.opacity  = m.captureActive ? 1    : 0.45;
+        const $btnOta = document.getElementById('btnOta');
+        if ($btnOta) {
+          $btnOta.classList.toggle('queued', !!m.otaPending);
+          $btnOta.title = m.otaPending
+            ? 'OTA queued — device will update on next wakeup'
+            : 'Request OTA firmware update';
+        }
         return;
       }
 

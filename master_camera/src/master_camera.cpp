@@ -14,12 +14,19 @@
 #include <Wire.h>
 #include <ws2812.h>
 #include <SparkFun_VL53L5CX_Library.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <HTTPUpdate.h>
+#include <ArduinoJson.h>
 
 using namespace websockets;
 
 // =================== CONFIGURATION ===================
 #define CAMERA_ID       "cam1"   // "cam1" for board 1, "cam2" for board 2
 #define MAX_FRAME_SIZE  1048576
+#define FIRMWARE_VERSION  "v1.0.0"
+#define FIRMWARE_DEVICE   "master_camera"
+#define GITHUB_REPO       "gperda/ESP32CameraTrap"
 #define MOTIONSENSOR_PIN GPIO_NUM_19
 #define TO_SLAVE_PIN    GPIO_NUM_45
 #define TOF_SENSOR_PIN GPIO_NUM_47
@@ -45,9 +52,9 @@ const char* password = "donatella";
 
 const char* server_hostname = "3dom";
 const uint16_t server_port  = 3000;
-//String ws_url;
+String ws_url = "";
 
-String ws_url = "wss://diana-adventure-belfast-stream.trycloudflare.com/ws";
+//String ws_url = "wss://diana-adventure-belfast-stream.trycloudflare.com/ws";
 const char* REGISTER_TOKEN = "reg-token";
 
 
@@ -82,6 +89,10 @@ struct SyncPacket {
 
 volatile bool ackReceived = false;
 volatile bool slaveReady  = false;
+
+RTC_DATA_ATTR bool otaPendingRTC      = false;
+RTC_DATA_ATTR bool slaveOtaPendingRTC = false;
+volatile bool otaRequested = false;
 
 // =================== ToF helpers ===================
 
@@ -225,7 +236,8 @@ void onMessage(WebsocketsMessage msg) {
   if (msg.isText()) {
     String data = msg.data();
     Serial.printf("← %s\n", data.c_str());
-    if (data == "capture") shouldCapture = true;
+    if (data == "capture")    shouldCapture = true;
+    if (data == "ota_update") { otaRequested = true; otaPendingRTC = true; slaveOtaPendingRTC = true; }
   }
 }
 
@@ -285,8 +297,8 @@ void connectToWiFi() {
 
 void connectWS() {
   if(WiFi.status() == WL_CONNECTED){
-    // bool serverResolved = false;
-    bool serverResolved = true;
+    bool serverResolved = false;
+    //bool serverResolved = true;
     if (ws_url.isEmpty()) {
       Serial.printf("Resolving %s.local", server_hostname);
       unsigned long t = millis();
@@ -298,8 +310,8 @@ void connectWS() {
       client.onMessage(onMessage);
       client.onEvent(onEvent);
       if (ws_url.startsWith("wss://")) client.setInsecure();
-      // bool ok = client.connect(ws_url.c_str());
-      bool ok = client.connect("diana-adventure-belfast-stream.trycloudflare.com", 443, "/ws");
+      bool ok = client.connect(ws_url.c_str());
+      //bool ok = client.connect("diana-adventure-belfast-stream.trycloudflare.com", 443, "/ws");
       if (!ok) { Serial.println("WS connection failed — will retry"); ws_url = ""; }
     }
   }
@@ -402,6 +414,100 @@ void wakeSlave(){
   delay(200);
 }
 
+// =================== OTA Update ===================
+bool performOTAIfAvailable() {
+  Serial.printf("[OTA] %s @ %s\n", FIRMWARE_DEVICE, FIRMWARE_VERSION);
+
+  // ── Step 1: Fetch release asset list from GitHub API ────────────────────
+  WiFiClientSecure apiClient;
+  apiClient.setInsecure();
+  HTTPClient http;
+  String releaseUrl = "https://api.github.com/repos/" + String(GITHUB_REPO) + "/releases/latest";
+  http.begin(apiClient, releaseUrl);
+  http.addHeader("User-Agent", "ESP32");
+  http.addHeader("Accept", "application/vnd.github+json");
+
+  int code = http.GET();
+  if (code != 200) {
+    Serial.printf("[OTA] GitHub API returned %d\n", code);
+    http.end();
+    return false;
+  }
+
+  JsonDocument filter;
+  filter["assets"][0]["name"]                 = true;
+  filter["assets"][0]["browser_download_url"] = true;
+
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, http.getStream(),
+                                             DeserializationOption::Filter(filter));
+  http.end();
+  if (err) { Serial.printf("[OTA] JSON parse error: %s\n", err.c_str()); return false; }
+
+  // ── Step 2: Locate versions.json and <device>.bin URLs ──────────────────
+  String versionsUrl, binUrl;
+  for (JsonObject asset : doc["assets"].as<JsonArray>()) {
+    const char* name = asset["name"];
+    if (name && strcmp(name, "versions.json") == 0)
+      versionsUrl = asset["browser_download_url"].as<String>();
+    if (name && strcmp(name, FIRMWARE_DEVICE ".bin") == 0)
+      binUrl = asset["browser_download_url"].as<String>();
+  }
+  if (versionsUrl.isEmpty() || binUrl.isEmpty()) {
+    Serial.println("[OTA] Required assets not found in release");
+    return false;
+  }
+
+  // ── Step 3: Fetch versions.json and compare ──────────────────────────────
+  WiFiClientSecure verClient;
+  verClient.setInsecure();
+  HTTPClient verHttp;
+  verHttp.begin(verClient, versionsUrl);
+  verHttp.addHeader("User-Agent", "ESP32");
+  code = verHttp.GET();
+  if (code != 200) {
+    Serial.printf("[OTA] versions.json fetch returned %d\n", code);
+    verHttp.end();
+    return false;
+  }
+
+  JsonDocument verDoc;
+  err = deserializeJson(verDoc, verHttp.getStream());
+  verHttp.end();
+  if (err) { Serial.printf("[OTA] versions.json parse error: %s\n", err.c_str()); return false; }
+
+  const char* remoteVersion = verDoc[FIRMWARE_DEVICE].as<const char*>();
+  if (!remoteVersion) { Serial.println("[OTA] Device key not found in versions.json"); return false; }
+  Serial.printf("[OTA] Remote: %s  Local: %s\n", remoteVersion, FIRMWARE_VERSION);
+  if (strcmp(remoteVersion, FIRMWARE_VERSION) == 0) {
+    Serial.println("[OTA] Already up to date");
+    return false;
+  }
+
+  // ── Step 4: Flash ────────────────────────────────────────────────────────
+  Serial.printf("[OTA] Updating %s → %s\n", FIRMWARE_VERSION, remoteVersion);
+  WiFiClientSecure binClient;
+  binClient.setInsecure();
+  httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  httpUpdate.rebootOnUpdate(false);
+
+  t_httpUpdate_return result = httpUpdate.update(binClient, binUrl);
+  switch (result) {
+    case HTTP_UPDATE_OK:
+      Serial.println("[OTA] Flash OK");
+      return true;
+    case HTTP_UPDATE_FAILED:
+      Serial.printf("[OTA] Flash FAILED: (%d) %s\n",
+                    httpUpdate.getLastError(),
+                    httpUpdate.getLastErrorString().c_str());
+      return false;
+    case HTTP_UPDATE_NO_UPDATES:
+      Serial.println("[OTA] No update reported");
+      return false;
+  }
+  return false;
+}
+
 // =================== Arduino Setup ===================
 void setup() {
   Serial.begin(115200);
@@ -421,6 +527,28 @@ void setup() {
   if (cause == ESP_SLEEP_WAKEUP_TIMER){
     ws2812SetColor(3);
 
+    // ── OTA retry/slave-signal path (flag persisted from a prior wakeup) ────
+    if (otaPendingRTC || slaveOtaPendingRTC) {
+      if (slaveOtaPendingRTC) {
+        slaveReady = false;
+        wakeSlave();
+        SyncPacket otaPkt; otaPkt.type = 0x05;
+        Serial.print("Slave OTA signal: ");
+        esp_now_send(slaveMAC, (uint8_t*)&otaPkt, sizeof(otaPkt));
+        unsigned long twait = millis();
+        while (!slaveReady && millis() - twait < 2000);
+        slaveOtaPendingRTC = false;
+      }
+      esp_now_deinit();
+      connectToWiFi();
+      if (WiFi.status() != WL_CONNECTED) { goToSleep(); }
+      if (otaPendingRTC && performOTAIfAvailable()) {
+        otaPendingRTC = false;
+        ESP.restart();
+      }
+      goToSleep();  // failure: flags stay set, retry next wakeup
+    }
+
     std::vector<String> flist = getSendList(SD_MMC, "/sendlist.txt");
     wakeSlave();
     slaveReady = false;
@@ -439,6 +567,9 @@ void setup() {
   //   Serial.printf("Free heap: %u  Max block: %u  Free PSRAM: %u\n",
   // ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram());
     connectWS();
+    // Allow the server's ota_update command to arrive before the send loop
+    client.poll();
+    delay(500);
     if(WiFi.status() == WL_CONNECTED && ws_url != ""){
       // // Allocate single send buffer from PSRAM
       g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
@@ -457,6 +588,17 @@ void setup() {
     } else {
       Serial.println("WiFi currently unavailable, will send later");
     }
+
+    // ── OTA (ota_update received during poll above) ───────────────────────
+    if (otaRequested) {
+      if (performOTAIfAvailable()) {
+        otaPendingRTC = false;
+        // slaveOtaPendingRTC stays true → slave signaled on next timer wakeup
+        ESP.restart();
+      }
+      // on failure: otaPendingRTC + slaveOtaPendingRTC stay true, retry next wakeup
+    }
+
     goToSleep();
   } else if (cause != ESP_SLEEP_WAKEUP_EXT0) goToSleep();
 
