@@ -23,6 +23,8 @@ const multer  = require('multer');
 
 // ─── Express static file server ───
 const app    = express();
+app.set('trust proxy', 1);
+const REGISTER_TOKEN = process.env.REGISTER_TOKEN;
 const server = http.createServer(app);
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -102,13 +104,21 @@ const CAPTURE_INTERVAL_MS = 2000;  // default auto-capture rate
 wss.on('connection', (ws, req) => {
   const ip = req.socket.remoteAddress;
   console.log(`+ connection from ${ip}`);
-  
 
   ws.isAlive    = true;
   ws.clientType = null;   // 'esp' | 'browser'
   ws.cameraId   = null;
 
+  // Close connections that never identify themselves within 10 seconds
+  const authTimeout = setTimeout(() => {
+    if (!ws.clientType) {
+      console.warn(`  Auth timeout — closing unidentified connection from ${ip}`);
+      ws.terminate();
+    }
+  }, 10_000);
+
   ws.on('pong', () => { ws.isAlive = true; });
+  ws.on('close', () => clearTimeout(authTimeout));
 
   ws.on('message', (data, isBinary) => {
     // ── Text messages ──
@@ -117,7 +127,14 @@ wss.on('connection', (ws, req) => {
 
       // ESP32 registration
       if (text.startsWith('register:')) {
-        const camId = text.slice(9);
+        const parts  = text.split(':');   // ['register', camId, token]
+        const camId  = parts[1] ?? '';
+        const token  = parts[2] ?? '';
+        if (REGISTER_TOKEN && token !== REGISTER_TOKEN) {
+          console.warn(`  Rejected ESP registration from ${ip} — bad token`);
+          ws.terminate();
+          return;
+        }
         ws.clientType = 'esp';
         ws.cameraId   = camId;
         espClients.set(camId, ws);

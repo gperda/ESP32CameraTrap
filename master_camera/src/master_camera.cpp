@@ -45,7 +45,11 @@ const char* password = "donatella";
 
 const char* server_hostname = "3dom";
 const uint16_t server_port  = 3000;
-String ws_url;
+//String ws_url;
+
+String ws_url = "wss://diana-adventure-belfast-stream.trycloudflare.com/ws";
+const char* REGISTER_TOKEN = "reg-token";
+
 
 // =================== Globals ===================
 WebsocketsClient client;
@@ -230,7 +234,8 @@ void onEvent(WebsocketsEvent event, String data) {
     case WebsocketsEvent::ConnectionOpened:
       Serial.println("WS: connected");
       wsConnected = true;
-      client.send("register:" CAMERA_ID);
+      //client.send("register:" CAMERA_ID);
+      client.send("register:" CAMERA_ID ":" + String(REGISTER_TOKEN));
       break;
     case WebsocketsEvent::ConnectionClosed:
       Serial.println("WS: disconnected");
@@ -280,7 +285,8 @@ void connectToWiFi() {
 
 void connectWS() {
   if(WiFi.status() == WL_CONNECTED){
-    bool serverResolved = false;
+    // bool serverResolved = false;
+    bool serverResolved = true;
     if (ws_url.isEmpty()) {
       Serial.printf("Resolving %s.local", server_hostname);
       unsigned long t = millis();
@@ -291,7 +297,9 @@ void connectWS() {
       Serial.printf("\nConnecting to %s …\n", ws_url.c_str());
       client.onMessage(onMessage);
       client.onEvent(onEvent);
-      bool ok = client.connect(ws_url.c_str());
+      if (ws_url.startsWith("wss://")) client.setInsecure();
+      // bool ok = client.connect(ws_url.c_str());
+      bool ok = client.connect("diana-adventure-belfast-stream.trycloudflare.com", 443, "/ws");
       if (!ok) { Serial.println("WS connection failed — will retry"); ws_url = ""; }
     }
   }
@@ -425,6 +433,11 @@ void setup() {
     esp_now_deinit();
 
     connectToWiFi();
+    // IPAddress resolvedIP;
+// bool dnsOk = WiFi.hostByName("diana-adventure-belfast-stream.trycloudflare.com", resolvedIP);
+// Serial.printf("DNS: %s → %s\n", dnsOk ? "OK" : "FAIL", resolvedIP.toString().c_str());
+  //   Serial.printf("Free heap: %u  Max block: %u  Free PSRAM: %u\n",
+  // ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram());
     connectWS();
     if(WiFi.status() == WL_CONNECTED && ws_url != ""){
       // // Allocate single send buffer from PSRAM

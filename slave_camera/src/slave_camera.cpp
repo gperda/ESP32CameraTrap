@@ -42,7 +42,10 @@ const char* password = "donatella";
 const char* server_hostname = "3dom";
 const uint16_t server_port = 3000;
 
-String ws_url;
+//String ws_url;
+String ws_url = "";
+const char* REGISTER_TOKEN = "reg-token";
+
 // =================== Globals ===================
 WebsocketsClient client;
 bool wsConnected             = false;
@@ -178,7 +181,8 @@ void onEvent(WebsocketsEvent event, String data) {
     case WebsocketsEvent::ConnectionOpened:
       Serial.println("WS: connected");
       wsConnected = true;
-      client.send("register:" CAMERA_ID);
+      // client.send("register:" CAMERA_ID);
+      client.send("register:" CAMERA_ID ":" + String(REGISTER_TOKEN));
       break;
 
     case WebsocketsEvent::ConnectionClosed:
@@ -261,7 +265,7 @@ void connectWS() {
       Serial.printf("Connecting to %s …\n", ws_url.c_str());
       client.onMessage(onMessage);
       client.onEvent(onEvent);
-
+      client.setInsecure();
       bool ok = client.connect(ws_url.c_str());
       if (!ok) {
         Serial.println("WS connection failed — will retry");
