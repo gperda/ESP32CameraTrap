@@ -95,6 +95,7 @@ volatile uint64_t captureTimestamp = 0;
 
 RTC_DATA_ATTR bool otaPendingRTC = false;
 volatile bool shouldOTA = false;
+volatile bool isUpToDate = false;
 // uint64_t* timestampsToSend = nullptr;
 // volatile uint64_t framesCount = 0;
 
@@ -425,7 +426,7 @@ void initEspNow() {
 
   esp_now_peer_info_t peer = {};
   memcpy(peer.peer_addr, masterMAC, 6);
-  peer.channel = 1;
+  peer.channel = 0;
   peer.encrypt = false;
   if (esp_now_add_peer(&peer) != ESP_OK){
     Serial.println("Failed to add peer");
@@ -454,14 +455,17 @@ bool performOTAIfAvailable() {
     return false;
   }
 
+  String body = http.getString();  // reads entire response before parsing
+  http.end();
+
   JsonDocument filter;
   filter["assets"][0]["name"]                 = true;
   filter["assets"][0]["browser_download_url"] = true;
 
   JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, http.getStream(),
+  DeserializationError err = deserializeJson(doc, body,
                                              DeserializationOption::Filter(filter));
-  http.end();
+
   if (err) { Serial.printf("[OTA] JSON parse error: %s\n", err.c_str()); return false; }
 
   String versionsUrl, binUrl;
@@ -481,6 +485,7 @@ bool performOTAIfAvailable() {
   verClient.setInsecure();
   HTTPClient verHttp;
   verHttp.begin(verClient, versionsUrl);
+  verHttp.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   verHttp.addHeader("User-Agent", "ESP32");
   code = verHttp.GET();
   if (code != 200) {
@@ -499,7 +504,8 @@ bool performOTAIfAvailable() {
   Serial.printf("[OTA] Remote: %s  Local: %s\n", remoteVersion, FIRMWARE_VERSION);
   if (strcmp(remoteVersion, FIRMWARE_VERSION) == 0) {
     Serial.println("[OTA] Already up to date");
-    return false;
+    isUpToDate = true;
+    return true;
   }
 
   Serial.printf("[OTA] Updating %s → %s\n", FIRMWARE_VERSION, remoteVersion);
@@ -550,7 +556,7 @@ void setup() {
 // =================== Arduino Loop ===================
 void loop() {
   if (shouldCapture) {
-    shouldCapture = false;
+    //shouldCapture = false;
     initCamera();
     //Serial.printf("Sync timestamp: %llu us\n", captureTimestamp);
     uint8_t ack = 0xCC;
@@ -558,34 +564,11 @@ void loop() {
     esp_now_send(masterMAC, &ack, 1);
     if(captureToSD(captureTimestamp) == 0)
         Serial.println("Error with capture");
-    goToSleep(); //if images are stored and sent later
+    //goToSleep(); //if images are stored and sent later
   } 
-  // if (shouldConnect) {
-  if (shouldOTA) {
-    ws2812SetColor(3);
-    shouldOTA = false;
-    uint8_t ack = 0xCC;
-    Serial.print("Slave OTA ready: ");
-    esp_now_send(masterMAC, &ack, 1);   // ACK before slow work — same as shouldSend
-    esp_now_deinit();
-    connectToWiFi();
-    if (WiFi.status() != WL_CONNECTED) {
-      Serial.println("[OTA] WiFi unavailable, will retry on next wakeup");
-      goToSleep();
-    }
-    if (performOTAIfAvailable()) {
-      otaPendingRTC = false;
-      ESP.restart();
-    }
-    // on failure: otaPendingRTC stays true, retries next wakeup
-    goToSleep();
-  }
-  // if (shouldConnect) {
-  //   ...
-  // }
   if (shouldSend) {
     ws2812SetColor(3);
-    shouldSend = false;
+    //shouldSend = false;
     uint8_t ack = 0xCC;
     Serial.print("Slave ready: ");
     esp_now_send(masterMAC, &ack, 1);
@@ -612,6 +595,29 @@ void loop() {
     } else {
       Serial.println("WiFi currently unavailable, will send later");
     }
-    goToSleep();
+    //goToSleep();
   }
+    if (shouldOTA) {
+      ws2812SetColor(3);
+      //shouldOTA = false;
+      uint8_t ack = 0xCC;
+      Serial.print("Slave OTA ready: ");
+      esp_now_send(masterMAC, &ack, 1);   // ACK before slow work — same as shouldSend
+      esp_now_deinit();
+      connectToWiFi();
+      if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[OTA] WiFi unavailable, will retry on next wakeup");
+        goToSleep();
+      }
+      if (performOTAIfAvailable()) {
+        otaPendingRTC = false;
+        if(!isUpToDate)
+          ESP.restart();
+      }
+    // on failure: otaPendingRTC stays true, retries next wakeup
+    //goToSleep();
+  }
+  // Sleep after doing something
+  if (shouldSend || shouldCapture || shouldOTA)
+    goToSleep();
 }

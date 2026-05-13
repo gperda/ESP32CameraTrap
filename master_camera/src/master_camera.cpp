@@ -93,6 +93,7 @@ volatile bool slaveReady  = false;
 RTC_DATA_ATTR bool otaPendingRTC      = false;
 RTC_DATA_ATTR bool slaveOtaPendingRTC = false;
 volatile bool otaRequested = false;
+volatile bool isUpToDate = false;
 
 // =================== ToF helpers ===================
 
@@ -399,7 +400,7 @@ void initEspNow() {
   esp_now_register_recv_cb(esp_now_recv_cb_t(onReceive));
   esp_now_peer_info_t peer = {};
   memcpy(peer.peer_addr, slaveMAC, 6);
-  peer.channel = 1;
+  peer.channel = 0;  // follow the active STA/Wi-Fi channel
   peer.encrypt = false;
   if (esp_now_add_peer(&peer) != ESP_OK) { Serial.println("Failed to add peer"); goToSleep(); }
 }
@@ -411,7 +412,7 @@ void wakeSlave(){
   digitalWrite(TO_SLAVE_PIN, HIGH);
   esp_rom_delay_us(100);
   digitalWrite(TO_SLAVE_PIN, LOW);
-  delay(200);
+  delay(500);
 }
 
 // =================== OTA Update ===================
@@ -424,9 +425,10 @@ bool performOTAIfAvailable() {
   HTTPClient http;
   String releaseUrl = "https://api.github.com/repos/" + String(GITHUB_REPO) + "/releases/latest";
   http.begin(apiClient, releaseUrl);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.addHeader("User-Agent", "ESP32");
   http.addHeader("Accept", "application/vnd.github+json");
-
+ 
   int code = http.GET();
   if (code != 200) {
     Serial.printf("[OTA] GitHub API returned %d\n", code);
@@ -434,14 +436,17 @@ bool performOTAIfAvailable() {
     return false;
   }
 
+  String body = http.getString();  // reads entire response before parsing
+  http.end();
+
   JsonDocument filter;
   filter["assets"][0]["name"]                 = true;
   filter["assets"][0]["browser_download_url"] = true;
 
   JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, http.getStream(),
+  DeserializationError err = deserializeJson(doc, body,
                                              DeserializationOption::Filter(filter));
-  http.end();
+
   if (err) { Serial.printf("[OTA] JSON parse error: %s\n", err.c_str()); return false; }
 
   // ── Step 2: Locate versions.json and <device>.bin URLs ──────────────────
@@ -463,6 +468,7 @@ bool performOTAIfAvailable() {
   verClient.setInsecure();
   HTTPClient verHttp;
   verHttp.begin(verClient, versionsUrl);
+  verHttp.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   verHttp.addHeader("User-Agent", "ESP32");
   code = verHttp.GET();
   if (code != 200) {
@@ -481,7 +487,8 @@ bool performOTAIfAvailable() {
   Serial.printf("[OTA] Remote: %s  Local: %s\n", remoteVersion, FIRMWARE_VERSION);
   if (strcmp(remoteVersion, FIRMWARE_VERSION) == 0) {
     Serial.println("[OTA] Already up to date");
-    return false;
+    isUpToDate = true;
+    return true;
   }
 
   // ── Step 4: Flash ────────────────────────────────────────────────────────
@@ -533,18 +540,20 @@ void setup() {
         slaveReady = false;
         wakeSlave();
         SyncPacket otaPkt; otaPkt.type = 0x05;
-        Serial.print("Slave OTA signal: ");
+        Serial.print("Slave OTA pending signal: ");
         esp_now_send(slaveMAC, (uint8_t*)&otaPkt, sizeof(otaPkt));
         unsigned long twait = millis();
         while (!slaveReady && millis() - twait < 2000);
-        slaveOtaPendingRTC = false;
+        // OTA slave trigger received, don't send again
+        if (slaveReady)
+          slaveOtaPendingRTC = false;
       }
-      esp_now_deinit();
       connectToWiFi();
       if (WiFi.status() != WL_CONNECTED) { goToSleep(); }
       if (otaPendingRTC && performOTAIfAvailable()) {
         otaPendingRTC = false;
-        ESP.restart();
+        if(!isUpToDate) //If updates are necessary
+          ESP.restart();
       }
       goToSleep();  // failure: flags stay set, retry next wakeup
     }
@@ -558,8 +567,6 @@ void setup() {
     esp_now_send(slaveMAC, (uint8_t*)&signal, sizeof(signal));
     unsigned long t = millis();
     while (!(slaveReady) && millis() - t < 2000);
-    esp_now_deinit();
-
     connectToWiFi();
     // IPAddress resolvedIP;
 // bool dnsOk = WiFi.hostByName("diana-adventure-belfast-stream.trycloudflare.com", resolvedIP);
@@ -595,12 +602,24 @@ void setup() {
 
     // ── OTA (ota_update received during poll above) ───────────────────────
     if (otaRequested) {
+      isUpToDate = false;
+      //Signal OTA update to slave
+      slaveReady = false;
+      wakeSlave();
+      SyncPacket otaPkt; otaPkt.type = 0x05;
+      Serial.print("Slave OTA signal: ");
+      esp_now_send(slaveMAC, (uint8_t*)&otaPkt, sizeof(otaPkt));
+      unsigned long twait = millis();
+      while (!slaveReady && millis() - twait < 2000);
+      // OTA trigger received by slave, don't send again
+      if (slaveReady)
+        slaveOtaPendingRTC = false;
       if (performOTAIfAvailable()) {
         otaPendingRTC = false;
-        // slaveOtaPendingRTC stays true → slave signaled on next timer wakeup
-        ESP.restart();
+        if (!isUpToDate)
+          ESP.restart();
       }
-      // on failure: otaPendingRTC + slaveOtaPendingRTC stay true, retry next wakeup
+      // on failure: otaPendingRTC stays true, retry next wakeup
     }
 
     goToSleep();
