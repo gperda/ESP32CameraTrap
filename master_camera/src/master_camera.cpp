@@ -13,11 +13,8 @@
 #include "SD_MMC.h"
 #include <Wire.h>
 #include <ws2812.h>
+#include <ota_update.h>
 #include <SparkFun_VL53L5CX_Library.h>
-#include <WiFiClientSecure.h>
-#include <HTTPClient.h>
-#include <HTTPUpdate.h>
-#include <ArduinoJson.h>
 
 using namespace websockets;
 
@@ -416,102 +413,7 @@ void wakeSlave(){
 
 // =================== OTA Update ===================
 bool performOTAIfAvailable() {
-  Serial.printf("[OTA] %s @ %s\n", FIRMWARE_DEVICE, FIRMWARE_VERSION);
-
-  // ── Step 1: Fetch release asset list from GitHub API ────────────────────
-  WiFiClientSecure apiClient;
-  apiClient.setInsecure();
-  HTTPClient http;
-  String releaseUrl = "https://api.github.com/repos/" + String(GITHUB_REPO) + "/releases/latest";
-  http.begin(apiClient, releaseUrl);
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.addHeader("User-Agent", "ESP32");
-  http.addHeader("Accept", "application/vnd.github+json");
- 
-  int code = http.GET();
-  if (code != 200) {
-    Serial.printf("[OTA] GitHub API returned %d\n", code);
-    http.end();
-    return false;
-  }
-
-  String body = http.getString();  // reads entire response before parsing
-  http.end();
-
-  JsonDocument filter;
-  filter["assets"][0]["name"]                 = true;
-  filter["assets"][0]["browser_download_url"] = true;
-
-  JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, body,
-                                             DeserializationOption::Filter(filter));
-
-  if (err) { Serial.printf("[OTA] JSON parse error: %s\n", err.c_str()); return false; }
-
-  // ── Step 2: Locate versions.json and <device>.bin URLs ──────────────────
-  String versionsUrl, binUrl;
-  for (JsonObject asset : doc["assets"].as<JsonArray>()) {
-    const char* name = asset["name"];
-    if (name && strcmp(name, "versions.json") == 0)
-      versionsUrl = asset["browser_download_url"].as<String>();
-    if (name && strcmp(name, FIRMWARE_DEVICE ".bin") == 0)
-      binUrl = asset["browser_download_url"].as<String>();
-  }
-  if (versionsUrl.isEmpty() || binUrl.isEmpty()) {
-    Serial.println("[OTA] Required assets not found in release");
-    return false;
-  }
-
-  // ── Step 3: Fetch versions.json and compare ──────────────────────────────
-  WiFiClientSecure verClient;
-  verClient.setInsecure();
-  HTTPClient verHttp;
-  verHttp.begin(verClient, versionsUrl);
-  verHttp.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  verHttp.addHeader("User-Agent", "ESP32");
-  code = verHttp.GET();
-  if (code != 200) {
-    Serial.printf("[OTA] versions.json fetch returned %d\n", code);
-    verHttp.end();
-    return false;
-  }
-
-  JsonDocument verDoc;
-  err = deserializeJson(verDoc, verHttp.getStream());
-  verHttp.end();
-  if (err) { Serial.printf("[OTA] versions.json parse error: %s\n", err.c_str()); return false; }
-
-  const char* remoteVersion = verDoc[FIRMWARE_DEVICE].as<const char*>();
-  if (!remoteVersion) { Serial.println("[OTA] Device key not found in versions.json"); return false; }
-  Serial.printf("[OTA] Remote: %s  Local: %s\n", remoteVersion, FIRMWARE_VERSION);
-  if (strcmp(remoteVersion, FIRMWARE_VERSION) == 0) {
-    Serial.println("[OTA] Already up to date");
-    isUpToDate = true;
-    return true;
-  }
-
-  // ── Step 4: Flash ────────────────────────────────────────────────────────
-  Serial.printf("[OTA] Updating %s → %s\n", FIRMWARE_VERSION, remoteVersion);
-  WiFiClientSecure binClient;
-  binClient.setInsecure();
-  httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  httpUpdate.rebootOnUpdate(false);
-
-  t_httpUpdate_return result = httpUpdate.update(binClient, binUrl);
-  switch (result) {
-    case HTTP_UPDATE_OK:
-      Serial.println("[OTA] Flash OK");
-      return true;
-    case HTTP_UPDATE_FAILED:
-      Serial.printf("[OTA] Flash FAILED: (%d) %s\n",
-                    httpUpdate.getLastError(),
-                    httpUpdate.getLastErrorString().c_str());
-      return false;
-    case HTTP_UPDATE_NO_UPDATES:
-      Serial.println("[OTA] No update reported");
-      return false;
-  }
-  return false;
+  return ::performOTAIfAvailable(FIRMWARE_DEVICE, FIRMWARE_VERSION, GITHUB_REPO, &isUpToDate);
 }
 
 // =================== Arduino Setup ===================
