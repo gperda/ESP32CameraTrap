@@ -144,8 +144,8 @@ wss.on('connection', (ws, req) => {
           if(camId === "cam1")
             ws.send('master_ota_update');
           else if (camId === "cam2")
-            ws.send('slave_ota_update')
-          OTApending = false;
+            ws.send('slave_ota_update');
+          OTAPending = false;
           console.log(`  OTA update command sent to ${camId}`);
           broadcastStatus();
         }

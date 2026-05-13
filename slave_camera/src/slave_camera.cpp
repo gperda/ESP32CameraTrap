@@ -554,7 +554,6 @@ void setup() {
 
 // =================== Arduino Loop ===================
 void loop() {
-  client.poll();
   if (shouldCapture) {
     initCamera();
     //Serial.printf("Sync timestamp: %llu us\n", captureTimestamp);
