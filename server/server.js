@@ -5,7 +5,7 @@
  * Browsers      connect on  ws://<host>:3000/ws   (register with "browser")
  *
  * Flow:
- *   1. Each ESP32 sends  register:cam1  or  register:cam2
+ *   1. Each ESP32 sends  register:camX:<token>:<firmwareVersion>
  *   2. Server periodically sends "capture" to every ESP32
  *   3. ESP32 replies with binary:  "camX:" + JPEG
  *   4. Server relays that binary verbatim to every browser client
@@ -96,6 +96,7 @@ const browserClients = new Set();
 
 // Image cache so late-joining browsers get the last frame immediately
 const latestImages = { cam1: null, cam2: null };
+const firmwareVersions = { cam1: null, cam2: null };
 
 let captureTimer = null;
 let masterOTAPending   = false;
@@ -129,9 +130,10 @@ wss.on('connection', (ws, req) => {
 
       // ESP32 registration
       if (text.startsWith('register:')) {
-        const parts  = text.split(':');   // ['register', camId, token]
+        const parts  = text.split(':');   // ['register', camId, token, firmwareVersion]
         const camId  = parts[1] ?? '';
         const token  = parts[2] ?? '';
+        const fwVersion = parts[3] ?? null;
         if (REGISTER_TOKEN && token !== REGISTER_TOKEN) {
           console.warn(`  Rejected ESP registration from ${ip} — bad token`);
           ws.terminate();
@@ -139,7 +141,11 @@ wss.on('connection', (ws, req) => {
         }
         ws.clientType = 'esp';
         ws.cameraId   = camId;
+        ws.firmwareVersion = fwVersion;
         espClients.set(camId, ws);
+        if (camId === 'cam1' || camId === 'cam2') {
+          firmwareVersions[camId] = fwVersion;
+        }
         console.log(`  ESP registered: ${camId}  (total ${espClients.size})`);
         if (masterOTAPending) {
           if(camId === "cam1"){
@@ -214,6 +220,9 @@ wss.on('connection', (ws, req) => {
     if (ws.clientType === 'esp') {
       espClients.delete(ws.cameraId);
       latestImages[ws.cameraId] = null;
+      if (ws.cameraId === 'cam1' || ws.cameraId === 'cam2') {
+        firmwareVersions[ws.cameraId] = null;
+      }
       console.log(`- ESP disconnected: ${ws.cameraId}`);
       if (espClients.size === 0) stopCapture();
       broadcastStatus();
@@ -261,7 +270,8 @@ function makeStatus() {
     cameras: Array.from(espClients.keys()),
     captureActive: captureTimer !== null,
     masterOTAPending,
-    slaveOTAPending
+    slaveOTAPending,
+    firmwareVersions
   });
 }
 

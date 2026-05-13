@@ -131,6 +131,12 @@
       align-items: center;
     }
     .panel-header h2 { font-size: 1rem; color: var(--accent); }
+    .panel-header h2 .cam-fw {
+      margin-left: 8px;
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: var(--muted);
+    }
     .panel-header .meta { font-size: .78rem; color: var(--muted); }
 
     .view {
@@ -295,11 +301,7 @@
     @media (max-width: 720px) {
       .cameras { flex-direction: column; align-items: center; }
       .panel   { max-width: 100%; }
-    }
-
-    /* ════════════════════════════════════════════════════════════
-       ToF SECTION — new styles only
-       ════════════════════════════════════════════════════════════ */
+    }*/
 
     .tof-section {
       margin: 0 20px 28px;
@@ -551,7 +553,7 @@
   <!-- Camera 2 -->
   <div class="panel">
     <div class="panel-header">
-      <h2>📷 Camera 2</h2>
+      <h2>📷 Camera 2 <span class="cam-fw" id="fw2">v—</span></h2>
       <span class="meta" id="meta2">—</span>
     </div>
     <div class="view">
@@ -563,7 +565,7 @@
   <!-- Camera 1 -->
   <div class="panel">
     <div class="panel-header">
-      <h2>📷 Camera 1</h2>
+      <h2>📷 Camera 1 <span class="cam-fw" id="fw1">v—</span></h2>
       <span class="meta" id="meta1">—</span>
     </div>
     <div class="view">
@@ -707,6 +709,10 @@ const $dotCam2   = document.getElementById('dotCam2');
 const $btnStart  = document.getElementById('btnStart');
 const $btnStop   = document.getElementById('btnStop');
 const $stats     = document.getElementById('stats');
+const $fw1       = document.getElementById('fw1');
+const $fw2       = document.getElementById('fw2');
+
+const firmwareByCam = { cam1: null, cam2: null };
 
 /* ── helpers ── */
 function send(msg) {
@@ -715,6 +721,18 @@ function send(msg) {
 function setDot(el, cls) {
   el.classList.remove('on-blue', 'on-green');
   if (cls) el.classList.add(cls);
+}
+
+function setFirmwareIfPresent(camId, version) {
+  if (typeof version === 'string' && version.trim()) firmwareByCam[camId] = version.trim();
+}
+
+function renderFirmwareLabels(masterPending, slavePending) {
+  const fwText1 = firmwareByCam.cam1 || 'v—';
+  const fwText2 = firmwareByCam.cam2 || 'v—';
+
+  if ($fw1) $fw1.textContent = masterPending ? `${fwText1} (to be updated)` : fwText1;
+  if ($fw2) $fw2.textContent = slavePending ? `${fwText2} (to be updated)` : fwText2;
 }
 
 /* ── WebSocket ── */
@@ -741,11 +759,27 @@ function connect() {
         setDot($dotCam2, m.cameras.includes('cam2') ? 'on-green' : null);
         $btnStart.style.opacity = m.captureActive ? 0.45 : 1;
         $btnStop.style.opacity  = m.captureActive ? 1    : 0.45;
+
+        const masterPending = !!m.masterOTAPending;
+        const slavePending  = !!m.slaveOTAPending;
+        const anyPending    = masterPending || slavePending;
+
+        if (m.firmwareVersions && typeof m.firmwareVersions === 'object') {
+          setFirmwareIfPresent('cam1', m.firmwareVersions.cam1);
+          setFirmwareIfPresent('cam2', m.firmwareVersions.cam2);
+        }
+        renderFirmwareLabels(masterPending, slavePending);
+
         const $btnOta = document.getElementById('btnOta');
         if ($btnOta) {
-          $btnOta.classList.toggle('queued', !!m.otaPending);
-          $btnOta.title = m.otaPending
-            ? 'OTA queued — device will update on next wakeup'
+          const queuedTargets = [
+            masterPending ? 'master' : null,
+            slavePending ? 'slave' : null
+          ].filter(Boolean).join(' + ');
+
+          $btnOta.classList.toggle('queued', anyPending);
+          $btnOta.title = anyPending
+            ? `OTA queued (${queuedTargets}) — device will update on next wakeup`
             : 'Request OTA firmware update';
         }
         return;

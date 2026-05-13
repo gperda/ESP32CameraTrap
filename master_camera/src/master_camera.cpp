@@ -24,7 +24,7 @@ using namespace websockets;
 // =================== CONFIGURATION ===================
 #define CAMERA_ID       "cam1"   // "cam1" for board 1, "cam2" for board 2
 #define MAX_FRAME_SIZE  1048576
-#define FIRMWARE_VERSION  "v1.1.0"
+#define FIRMWARE_VERSION  "v1.2.0"
 #define FIRMWARE_DEVICE   "master_camera"
 #define GITHUB_REPO       "gperda/ESP32CameraTrap"
 #define MOTIONSENSOR_PIN GPIO_NUM_19
@@ -247,7 +247,7 @@ void onEvent(WebsocketsEvent event, String data) {
       Serial.println("WS: connected");
       wsConnected = true;
       //client.send("register:" CAMERA_ID);
-      client.send("register:" CAMERA_ID ":" + String(REGISTER_TOKEN));
+      client.send("register:" CAMERA_ID ":" + String(REGISTER_TOKEN) + ":" + String(FIRMWARE_VERSION));
       break;
     case WebsocketsEvent::ConnectionClosed:
       Serial.println("WS: disconnected");

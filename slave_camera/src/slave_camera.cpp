@@ -33,7 +33,7 @@ using namespace websockets;
 // =================== CONFIGURATION ===================
 #define CAMERA_ID "cam2"   // ← This is the only difference from cam1
 #define MAX_FRAME_SIZE 1048576
-#define FIRMWARE_VERSION  "v1.0.0"
+#define FIRMWARE_VERSION  "v1.2.0"
 #define FIRMWARE_DEVICE   "slave_camera"
 #define GITHUB_REPO       "gperda/ESP32CameraTrap"
 #define TRIGGER_WAKEUP_PIN GPIO_NUM_21
@@ -197,7 +197,7 @@ void onEvent(WebsocketsEvent event, String data) {
       Serial.println("WS: connected");
       wsConnected = true;
       // client.send("register:" CAMERA_ID);
-      client.send("register:" CAMERA_ID ":" + String(REGISTER_TOKEN));
+      client.send("register:" CAMERA_ID ":" + String(REGISTER_TOKEN) + ":" + String(FIRMWARE_VERSION));
       break;
 
     case WebsocketsEvent::ConnectionClosed:
