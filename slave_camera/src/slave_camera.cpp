@@ -184,6 +184,9 @@ void onMessage(WebsocketsMessage msg) {
     if (data == "capture") {
       shouldCapture = true;
     }
+    if (data == "slave_ota_update"){
+      shouldOTA = true;
+    }
   }
 }
 
@@ -230,16 +233,12 @@ void onReceive(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
         shouldConnect = true;
     } else if (pkt.type == 0x03){
         shouldSleep = true;
-    } else if (pkt.type == 0x04){
+    } else if (pkt.type == 0x04)
         shouldSend = true;
         // framesCount = pkt.framesCount;
         // timestampsToSend = (uint64_t*)ps_malloc(framesCount * sizeof(uint64_t));
         // if (timestampsToSend == nullptr) return; 
         // memcpy(timestampsToSend, data + sizeof(SyncPacket), framesCount * sizeof(uint64_t));
-    } else if (pkt.type == 0x05) {
-        shouldOTA     = true;
-        otaPendingRTC = true;
-    }
 }
 
 void connectToWiFi(){
@@ -555,8 +554,8 @@ void setup() {
 
 // =================== Arduino Loop ===================
 void loop() {
+  client.poll();
   if (shouldCapture) {
-    //shouldCapture = false;
     initCamera();
     //Serial.printf("Sync timestamp: %llu us\n", captureTimestamp);
     uint8_t ack = 0xCC;
@@ -564,11 +563,9 @@ void loop() {
     esp_now_send(masterMAC, &ack, 1);
     if(captureToSD(captureTimestamp) == 0)
         Serial.println("Error with capture");
-    //goToSleep(); //if images are stored and sent later
   } 
   if (shouldSend) {
     ws2812SetColor(3);
-    //shouldSend = false;
     uint8_t ack = 0xCC;
     Serial.print("Slave ready: ");
     esp_now_send(masterMAC, &ack, 1);
@@ -595,15 +592,9 @@ void loop() {
     } else {
       Serial.println("WiFi currently unavailable, will send later");
     }
-    //goToSleep();
   }
     if (shouldOTA) {
       ws2812SetColor(3);
-      //shouldOTA = false;
-      uint8_t ack = 0xCC;
-      Serial.print("Slave OTA ready: ");
-      esp_now_send(masterMAC, &ack, 1);   // ACK before slow work — same as shouldSend
-      esp_now_deinit();
       connectToWiFi();
       if (WiFi.status() != WL_CONNECTED) {
         Serial.println("[OTA] WiFi unavailable, will retry on next wakeup");
@@ -615,7 +606,6 @@ void loop() {
           ESP.restart();
       }
     // on failure: otaPendingRTC stays true, retries next wakeup
-    //goToSleep();
   }
   // Sleep after doing something
   if (shouldSend || shouldCapture || shouldOTA)

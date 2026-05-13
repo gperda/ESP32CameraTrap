@@ -238,7 +238,7 @@ void onMessage(WebsocketsMessage msg) {
     String data = msg.data();
     Serial.printf("← %s\n", data.c_str());
     if (data == "capture")    shouldCapture = true;
-    if (data == "ota_update") { Serial.println("Received ota update"); otaRequested = true; otaPendingRTC = true; slaveOtaPendingRTC = true; }
+    if (data == "master_ota_update") { Serial.println("Received ota update"); otaRequested = true; otaPendingRTC = true; slaveOtaPendingRTC = true; }
   }
 }
 
@@ -535,22 +535,14 @@ void setup() {
     ws2812SetColor(3);
 
     // ── OTA retry/slave-signal path (flag persisted from a prior wakeup) ────
-    if (otaPendingRTC || slaveOtaPendingRTC) {
-      if (slaveOtaPendingRTC) {
-        slaveReady = false;
-        wakeSlave();
-        SyncPacket otaPkt; otaPkt.type = 0x05;
-        Serial.print("Slave OTA pending signal: ");
-        esp_now_send(slaveMAC, (uint8_t*)&otaPkt, sizeof(otaPkt));
-        unsigned long twait = millis();
-        while (!slaveReady && millis() - twait < 2000);
-        // OTA slave trigger received, don't send again
-        if (slaveReady)
-          slaveOtaPendingRTC = false;
-      }
+    if (otaPendingRTC) {
+      ws2812SetColor(3);
       connectToWiFi();
-      if (WiFi.status() != WL_CONNECTED) { goToSleep(); }
-      if (otaPendingRTC && performOTAIfAvailable()) {
+      if (WiFi.status() != WL_CONNECTED) { 
+        Serial.println("[OTA] WiFi unavailable, will retry on next wakeup");
+        goToSleep(); 
+      }
+      if (performOTAIfAvailable()) {
         otaPendingRTC = false;
         if(!isUpToDate) //If updates are necessary
           ESP.restart();
@@ -602,18 +594,12 @@ void setup() {
 
     // ── OTA (ota_update received during poll above) ───────────────────────
     if (otaRequested) {
+      ws2812SetColor(3);
+      if (WiFi.status() != WL_CONNECTED) { 
+        Serial.println("[OTA] WiFi unavailable, will retry on next wakeup");
+        goToSleep(); 
+      }
       isUpToDate = false;
-      //Signal OTA update to slave
-      slaveReady = false;
-      wakeSlave();
-      SyncPacket otaPkt; otaPkt.type = 0x05;
-      Serial.print("Slave OTA signal: ");
-      esp_now_send(slaveMAC, (uint8_t*)&otaPkt, sizeof(otaPkt));
-      unsigned long twait = millis();
-      while (!slaveReady && millis() - twait < 2000);
-      // OTA trigger received by slave, don't send again
-      if (slaveReady)
-        slaveOtaPendingRTC = false;
       if (performOTAIfAvailable()) {
         otaPendingRTC = false;
         if (!isUpToDate)
@@ -668,42 +654,6 @@ void setup() {
   } while (elapsedTime < TOF_SENSOR_WAIT_TIME_US);
 
   Serial.printf("Elapsed time %llu\n", elapsedTime);
-  
-
-  
-
-  
-  // esp_rom_delay_us(100000);
-  // // Serial.print("Slave connect signal: ");
-  // // esp_now_send(slaveMAC, (uint8_t*)&signal, sizeof(signal));
-
-  // if (i > 0) {
-  //   // Forward timestamp list to slave
-  //   uint8_t buf[sizeof(SyncPacket) + i * sizeof(uint64_t)];
-  //   size_t  ts_bytes = i * sizeof(uint64_t);
-  //   SyncPacket* hdr  = (SyncPacket*)buf;
-  //   hdr->type        = 0x04;
-  //   hdr->framesCount = i;
-  //   hdr->timestamp_us = 0;
-  //   memcpy(buf + sizeof(SyncPacket), ts, ts_bytes);
-  //   esp_rom_delay_us(100000);
-  //   Serial.print("Slave send signal: ");
-  //   esp_now_send(slaveMAC, buf, sizeof(buf));
-
-  //   esp_rom_delay_us(100000);
-  //   esp_now_deinit();
-
-  //   connectToWiFi();
-  //   connectWS();
-
-  //   // Send captured images
-  //   for (int j = 0; j < i; j++) {
-  //     sendFromSD(ts[j]);
-  //   }
-
-  // }
-
-  //esp_now_deinit();
   goToSleep();
 }
 
