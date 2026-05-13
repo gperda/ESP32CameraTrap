@@ -91,7 +91,6 @@ volatile bool ackReceived = false;
 volatile bool slaveReady  = false;
 
 RTC_DATA_ATTR bool otaPendingRTC      = false;
-RTC_DATA_ATTR bool slaveOtaPendingRTC = false;
 volatile bool otaRequested = false;
 volatile bool isUpToDate = false;
 
@@ -238,7 +237,7 @@ void onMessage(WebsocketsMessage msg) {
     String data = msg.data();
     Serial.printf("← %s\n", data.c_str());
     if (data == "capture")    shouldCapture = true;
-    if (data == "master_ota_update") { Serial.println("Received ota update"); otaRequested = true; otaPendingRTC = true; slaveOtaPendingRTC = true; }
+    if (data == "master_ota_update") { Serial.println("Received ota update"); otaRequested = true; otaPendingRTC = true;}
   }
 }
 
@@ -412,7 +411,7 @@ void wakeSlave(){
   digitalWrite(TO_SLAVE_PIN, HIGH);
   esp_rom_delay_us(100);
   digitalWrite(TO_SLAVE_PIN, LOW);
-  delay(500);
+  delay(300);
 }
 
 // =================== OTA Update ===================
@@ -534,21 +533,21 @@ void setup() {
   if (cause == ESP_SLEEP_WAKEUP_TIMER){
     ws2812SetColor(3);
 
-    // ── OTA retry/slave-signal path (flag persisted from a prior wakeup) ────
-    if (otaPendingRTC) {
-      ws2812SetColor(3);
-      connectToWiFi();
-      if (WiFi.status() != WL_CONNECTED) { 
-        Serial.println("[OTA] WiFi unavailable, will retry on next wakeup");
-        goToSleep(); 
-      }
-      if (performOTAIfAvailable()) {
-        otaPendingRTC = false;
-        if(!isUpToDate) //If updates are necessary
-          ESP.restart();
-      }
-      goToSleep();  // failure: flags stay set, retry next wakeup
-    }
+    // // ── OTA retry/slave-signal path (flag persisted from a prior wakeup) ────
+    // if (otaPendingRTC) {
+    //   ws2812SetColor(3);
+    //   connectToWiFi();
+    //   if (WiFi.status() != WL_CONNECTED) { 
+    //     Serial.println("[OTA] WiFi unavailable, will retry on next wakeup");
+    //     goToSleep(); 
+    //   }
+    //   if (performOTAIfAvailable()) {
+    //     otaPendingRTC = false;
+    //     if(!isUpToDate) //If updates are necessary
+    //       ESP.restart();
+    //   }
+    //   goToSleep();  // failure: flags stay set, retry next wakeup
+    // }
 
     std::vector<String> flist = getSendList(SD_MMC, "/sendlist.txt");
     wakeSlave();
@@ -567,7 +566,6 @@ void setup() {
   // ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram());
     connectWS();
     // Allow the server's ota_update command to arrive before the send loop
-    Serial.println("Polling");
     unsigned long pollEnd = millis() + 1000;
     while (millis() < pollEnd) {
       client.poll();
@@ -593,7 +591,7 @@ void setup() {
     }
 
     // ── OTA (ota_update received during poll above) ───────────────────────
-    if (otaRequested) {
+    if (otaRequested || otaPendingRTC) {
       ws2812SetColor(3);
       if (WiFi.status() != WL_CONNECTED) { 
         Serial.println("[OTA] WiFi unavailable, will retry on next wakeup");

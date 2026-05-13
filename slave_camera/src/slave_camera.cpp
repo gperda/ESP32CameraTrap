@@ -186,6 +186,7 @@ void onMessage(WebsocketsMessage msg) {
     }
     if (data == "slave_ota_update"){
       shouldOTA = true;
+      otaPendingRTC = true;
     }
   }
 }
@@ -233,8 +234,10 @@ void onReceive(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
         shouldConnect = true;
     } else if (pkt.type == 0x03){
         shouldSleep = true;
-    } else if (pkt.type == 0x04)
+    } else if (pkt.type == 0x04){
+        Serial.println("Received send signal");
         shouldSend = true;
+    }
         // framesCount = pkt.framesCount;
         // timestampsToSend = (uint64_t*)ps_malloc(framesCount * sizeof(uint64_t));
         // if (timestampsToSend == nullptr) return; 
@@ -444,6 +447,7 @@ bool performOTAIfAvailable() {
   HTTPClient http;
   String releaseUrl = "https://api.github.com/repos/" + String(GITHUB_REPO) + "/releases/latest";
   http.begin(apiClient, releaseUrl);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.addHeader("User-Agent", "ESP32");
   http.addHeader("Accept", "application/vnd.github+json");
 
@@ -554,6 +558,7 @@ void setup() {
 
 // =================== Arduino Loop ===================
 void loop() {
+
   if (shouldCapture) {
     initCamera();
     //Serial.printf("Sync timestamp: %llu us\n", captureTimestamp);
@@ -572,6 +577,11 @@ void loop() {
     esp_now_deinit();
     connectToWiFi();
     connectWS();
+    unsigned long pollEnd = millis() + 1000;
+    while (millis() < pollEnd) {
+      client.poll();
+      delay(10);
+    }
     if(WiFi.status() == WL_CONNECTED && ws_url != ""){
       // Allocate the single send buffer from PSRAM once at startup
       g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
@@ -591,10 +601,8 @@ void loop() {
     } else {
       Serial.println("WiFi currently unavailable, will send later");
     }
-  }
     if (shouldOTA) {
       ws2812SetColor(3);
-      connectToWiFi();
       if (WiFi.status() != WL_CONNECTED) {
         Serial.println("[OTA] WiFi unavailable, will retry on next wakeup");
         goToSleep();
@@ -604,9 +612,11 @@ void loop() {
         if(!isUpToDate)
           ESP.restart();
       }
-    // on failure: otaPendingRTC stays true, retries next wakeup
+      // on failure: otaPendingRTC stays true, retries next wakeup
+    }
   }
+  
   // Sleep after doing something
-  if (shouldSend || shouldCapture || shouldOTA)
+  if (shouldSend || shouldCapture)
     goToSleep();
 }

@@ -124,7 +124,6 @@ void readFile(fs::FS &fs, const char * path){
 std::vector<String> getSendList(fs::FS &fs, const char* path) {
     std::vector<String> flist;
 
-
     // Debug: check if file exists and print card info
     Serial.printf("Attempting to open: '%s'\n", path);
     Serial.printf("Card type: %d\n", SD_MMC.cardType());
