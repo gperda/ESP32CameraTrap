@@ -98,7 +98,8 @@ const browserClients = new Set();
 const latestImages = { cam1: null, cam2: null };
 
 let captureTimer = null;
-let OTAPending   = false;
+let masterOTAPending   = false;
+let slaveOTAPending = false;
 const CAPTURE_INTERVAL_MS = 2000;  // default auto-capture rate
 
 // ─── Connection handler ───
@@ -140,14 +141,19 @@ wss.on('connection', (ws, req) => {
         ws.cameraId   = camId;
         espClients.set(camId, ws);
         console.log(`  ESP registered: ${camId}  (total ${espClients.size})`);
-        if (OTAPending) {
-          if(camId === "cam1")
+        if (masterOTAPending) {
+          if(camId === "cam1"){
             ws.send('master_ota_update');
-          else if (camId === "cam2")
+            masterOTAPending = false;
+            console.log(`  OTA update command sent to ${camId}`);
+          }
+        }
+        if (slaveOTAPending){
+          if (camId === "cam2"){
             ws.send('slave_ota_update');
-          OTAPending = false;
-          console.log(`  OTA update command sent to ${camId}`);
-          broadcastStatus();
+            slaveOTAPending = false;
+            console.log(`  OTA update command sent to ${camId}`);
+          }
         }
         maybeStartCapture();
         broadcastStatus();
@@ -177,7 +183,7 @@ wss.on('connection', (ws, req) => {
       if (text === 'trigger_capture') { triggerCapture(); return; }
       if (text === 'start_auto')      { startCapture();   return; }
       if (text === 'stop_auto')       { stopCapture();    return; }
-      if (text === 'request_ota')     { OTAPending = true; broadcastStatus(); return; }
+      if (text === 'request_ota')     { masterOTAPending = true; slaveOTAPending = true; broadcastStatus(); return; }
       return;
     }
 
@@ -254,7 +260,8 @@ function makeStatus() {
     type: 'status',
     cameras: Array.from(espClients.keys()),
     captureActive: captureTimer !== null,
-    OTAPending
+    masterOTAPending,
+    slaveOTAPending
   });
 }
 
