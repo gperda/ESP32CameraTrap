@@ -216,6 +216,20 @@
       flex-shrink: 0;
     }
     .btn-pair-dl:hover { background: #1a3060; }
+    .btn-pair-combo {
+      margin-left: 4px;
+      padding: 3px 9px;
+      font-size: 0.75rem;
+      border-radius: 6px;
+      background: #21406e;
+      color: #d7e6ff;
+      border: 1px solid #385c94;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background .15s, opacity .15s;
+    }
+    .btn-pair-combo:hover:not(:disabled) { background: #1a3356; }
+    .btn-pair-combo:disabled { opacity: 0.35; cursor: not-allowed; color: var(--muted); }
     .btn-depth {
       margin-left: 4px;
       padding: 3px 9px;
@@ -903,6 +917,13 @@ function addOrUpdatePair(tsStr, camId, jpeg, frameNum, sizeKB) {
     dlBtn.textContent = '\u2b07';
     dlBtn.addEventListener('click', e => { e.stopPropagation(); downloadPair(tsStr); });
 
+    const comboBtn = document.createElement('button');
+    comboBtn.className   = 'btn-pair-combo';
+    comboBtn.title       = 'Download cam2+cam1 side-by-side image';
+    comboBtn.textContent = '↔ Combo';
+    comboBtn.disabled    = true;
+    comboBtn.addEventListener('click', e => { e.stopPropagation(); downloadPairCombined(tsStr); });
+
     const depthBtn = document.createElement('button');
     depthBtn.className   = 'btn-depth';
     depthBtn.title       = 'Compute stereo depth map';
@@ -921,6 +942,7 @@ function addOrUpdatePair(tsStr, camId, jpeg, frameNum, sizeKB) {
     rowEl.appendChild(badge1El);
     rowEl.appendChild(badge2El);
     rowEl.appendChild(dlBtn);
+    rowEl.appendChild(comboBtn);
     rowEl.appendChild(depthBtn);
     rowEl.appendChild(undistortBtn);
     rowEl.addEventListener('click', () => showPair(tsStr));
@@ -928,7 +950,7 @@ function addOrUpdatePair(tsStr, camId, jpeg, frameNum, sizeKB) {
     const $pairList = document.getElementById('pairList');
     $pairList.insertBefore(rowEl, $pairList.firstChild);
 
-    pairMap.set(tsStr, { cam1: null, cam2: null, rowEl, badge1El, badge2El, depthBtn, undistortBtn });
+    pairMap.set(tsStr, { cam1: null, cam2: null, rowEl, badge1El, badge2El, comboBtn, depthBtn, undistortBtn });
   }
 
   const entry   = pairMap.get(tsStr);
@@ -940,6 +962,7 @@ function addOrUpdatePair(tsStr, camId, jpeg, frameNum, sizeKB) {
 
   // Enable depth button once both images have arrived
   if (entry.cam1 && entry.cam2) {
+    if (entry.comboBtn) entry.comboBtn.disabled = false;
     if (entry.depthBtn) entry.depthBtn.disabled = false;
     if (entry.undistortBtn) entry.undistortBtn.disabled = false;
   }
@@ -984,6 +1007,56 @@ function downloadPair(tsStr) {
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
+}
+
+async function decodeBlobToImage(blob) {
+  if (typeof createImageBitmap === 'function') {
+    return createImageBitmap(blob);
+  }
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Image decode failed'));
+    };
+    img.src = url;
+  });
+}
+
+async function downloadPairCombined(tsStr) {
+  const entry = pairMap.get(tsStr);
+  if (!entry || !entry.cam1 || !entry.cam2) return;
+
+  const cam2Img = await decodeBlobToImage(entry.cam2.blob);
+  const cam1Img = await decodeBlobToImage(entry.cam1.blob);
+
+  const refW = cam2Img.width;
+  const refH = cam2Img.height;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = refW * 2;
+  canvas.height = refH;
+
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(cam2Img, 0, 0, refW, refH);
+  ctx.drawImage(cam1Img, refW, 0, refW, refH);
+
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cam2_cam1_combo_${tsStr}.jpg`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }, 'image/jpeg', 0.95);
 }
 
 // ─────────────────────────────────────────────────────────────
