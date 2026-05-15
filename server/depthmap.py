@@ -2,13 +2,18 @@
 depthmap.py — Stereo disparity map computation using OpenCV
 
 Usage:
-    python3 depthmap.py <img1> <img2> <outpath> [<calib_json>]
+    python3 depthmap.py <img1> <img2> <outpath> [<calib_json>] [<mode>]
 
 Arguments:
     img1        Path to left camera JPEG (cam1)
     img2        Path to right camera JPEG (cam2)
     outpath     Path for output PNG (colorized disparity)
     calib_json  (optional) Path to calibration.json
+    mode        (optional) one of:
+                - "depth" (default)
+                - "undistort" (side-by-side preview)
+                - "undistort_cam1" (left image only)
+                - "undistort_cam2" (right image only)
 
 calibration.json format:
     {
@@ -128,6 +133,22 @@ def colorize_disparity(disp16):
     return colored
 
 
+def make_undistort_preview(left_bgr, right_bgr):
+    """Create side-by-side undistorted preview image for browser display."""
+    h = max(left_bgr.shape[0], right_bgr.shape[0])
+    w = left_bgr.shape[1] + right_bgr.shape[1]
+    out = np.zeros((h, w, 3), dtype=np.uint8)
+
+    out[:left_bgr.shape[0], :left_bgr.shape[1]] = left_bgr
+    out[:right_bgr.shape[0], left_bgr.shape[1]:left_bgr.shape[1] + right_bgr.shape[1]] = right_bgr
+
+    split_x = left_bgr.shape[1]
+    cv2.line(out, (split_x, 0), (split_x, h - 1), (255, 255, 255), 1)
+    cv2.putText(out, "cam1 undistorted", (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1, cv2.LINE_AA)
+    cv2.putText(out, "cam2 undistorted", (split_x + 8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1, cv2.LINE_AA)
+    return out
+
+
 def main():
     if len(sys.argv) < 4:
         fail("Usage: depthmap.py <img1> <img2> <outpath> [<calib_json>]")
@@ -136,6 +157,12 @@ def main():
     img2_path   = sys.argv[2]
     out_path    = sys.argv[3]
     calib_path  = sys.argv[4] if len(sys.argv) >= 5 else None
+    mode        = (sys.argv[5] if len(sys.argv) >= 6 else "depth").strip().lower()
+    if mode not in ("depth", "undistort", "undistort_cam1", "undistort_cam2"):
+        fail(
+            f"Invalid mode: '{mode}'. Expected one of "
+            "'depth', 'undistort', 'undistort_cam1', 'undistort_cam2'"
+        )
 
     # ── Load images ───────────────────────────────────────────────────────────
     left_bgr  = cv2.imread(img1_path)
@@ -185,21 +212,35 @@ def main():
         right_gray = cv2.cvtColor(right_bgr, cv2.COLOR_BGR2GRAY)
         calibrated = False
 
-    # ── Compute disparity ─────────────────────────────────────────────────────
-    disp16 = compute_disparity(left_gray, right_gray)
+    if mode == "depth":
+        # ── Compute disparity ─────────────────────────────────────────────────
+        disp16 = compute_disparity(left_gray, right_gray)
 
-    # ── Colorize and save ─────────────────────────────────────────────────────
-    colored = colorize_disparity(disp16)
+        # ── Colorize and save ─────────────────────────────────────────────────
+        out_img = colorize_disparity(disp16)
+        mode_label = "depth"
+    elif mode == "undistort":
+        # Keep the preview in color so image quality / alignment are easy to inspect.
+        preview_left = left_rect if calibrated else left_bgr
+        preview_right = right_rect if calibrated else right_bgr
+        out_img = make_undistort_preview(preview_left, preview_right)
+        mode_label = "undistort"
+    elif mode == "undistort_cam1":
+        out_img = left_rect if calibrated else left_bgr
+        mode_label = "undistort_cam1"
+    else:
+        out_img = right_rect if calibrated else right_bgr
+        mode_label = "undistort_cam2"
 
-    # Annotate mode in corner
-    label = "calibrated" if calibrated else "uncalibrated"
+    # Annotate processing mode and calibration state
+    state_label = "calibrated" if calibrated else "uncalibrated"
     cv2.putText(
-        colored, label, (8, colored.shape[0] - 8),
+        out_img, f"{mode_label} · {state_label}", (8, out_img.shape[0] - 8),
         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA,
     )
 
-    cv2.imwrite(out_path, colored)
-    print(json.dumps({"success": True, "calibrated": calibrated}), flush=True)
+    cv2.imwrite(out_path, out_img)
+    print(json.dumps({"success": True, "calibrated": calibrated, "mode": mode_label}), flush=True)
     sys.exit(0)
 
 

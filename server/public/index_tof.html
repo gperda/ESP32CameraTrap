@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ESP32  Camera Viewer</title>
+  <title>ESP32 Dual Camera Viewer</title>
   <style>
     /* ── Original tokens (unchanged) ───────────────────────────── */
     :root {
@@ -97,12 +97,6 @@
     .btn-snap  { background: var(--accent); color: #fff; }
     .btn-start { background: var(--green);  color: #fff; }
     .btn-stop  { background: #ff9800;       color: #fff; }
-    .btn-ota   { background: #673ab7;       color: #fff; }
-    .btn-ota.queued {
-      background: #f57c00;
-      animation: otaPulse 1.5s ease-in-out infinite alternate;
-    }
-    @keyframes otaPulse { from { opacity: 0.75; } to { opacity: 1; } }
 
     /* ── Camera grid ── */
     .cameras {
@@ -131,12 +125,6 @@
       align-items: center;
     }
     .panel-header h2 { font-size: 1rem; color: var(--accent); }
-    .panel-header h2 .cam-fw {
-      margin-left: 8px;
-      font-size: 0.78rem;
-      font-weight: 500;
-      color: var(--muted);
-    }
     .panel-header .meta { font-size: .78rem; color: var(--muted); }
 
     .view {
@@ -201,7 +189,7 @@
       border-radius: 4px;
       background: rgba(255,255,255,0.08);
       color: var(--text);
-      white-space: nowrap;
+      cursor: pointer;
     }
     .cam-badge.missing { color: var(--muted); background: rgba(255,255,255,0.03); font-style: italic; }
     .btn-pair-dl {
@@ -216,95 +204,8 @@
       flex-shrink: 0;
     }
     .btn-pair-dl:hover { background: #1a3060; }
-    .btn-depth {
-      margin-left: 4px;
-      padding: 3px 9px;
-      font-size: 0.75rem;
-      border-radius: 6px;
-      background: var(--border);
-      color: var(--tof-accent);
-      border: 1px solid #1a4060;
-      cursor: pointer;
-      flex-shrink: 0;
-      transition: background .15s, opacity .15s;
-    }
-    .btn-depth:hover:not(:disabled) { background: #0d3050; }
-    .btn-depth:disabled { opacity: 0.35; cursor: not-allowed; color: var(--muted); }
-    .btn-undistort {
-      margin-left: 4px;
-      padding: 3px 9px;
-      font-size: 0.75rem;
-      border-radius: 6px;
-      background: #133354;
-      color: #9de7ff;
-      border: 1px solid #1f4f7d;
-      cursor: pointer;
-      flex-shrink: 0;
-      transition: background .15s, opacity .15s;
-    }
-    .btn-undistort:hover:not(:disabled) { background: #0d2740; }
-    .btn-undistort:disabled { opacity: 0.35; cursor: not-allowed; color: var(--muted); }
 
-    /* ── Stereo depth panel ── */
-    .depth-panel {
-      display: none;
-      margin: 0 20px 20px;
-      border: 2px solid var(--border);
-      border-radius: 12px;
-      overflow: hidden;
-      background: var(--card);
-    }
-    .depth-panel.visible { display: block; }
-    .depth-panel-header {
-      background: var(--border);
-      padding: 10px 18px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      flex-wrap: wrap;
-      gap: 10px;
-    }
-    .depth-panel-header h2 {
-      font-size: 1rem;
-      color: var(--tof-accent);
-      letter-spacing: 1px;
-    }
-    .depth-panel-body {
-      padding: 16px 20px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 12px;
-    }
-    #depthResultImg {
-      max-width: 100%;
-      border-radius: 6px;
-      border: 1px solid var(--border);
-      display: none;
-    }
-    #depthResultImg.show { display: block; }
-    .depth-status {
-      font-family: var(--mono);
-      font-size: 0.8rem;
-      color: var(--tof-dim);
-    }
-    .depth-status.error { color: var(--tof-alert); }
-    #depthDownloadLink {
-      display: none;
-      padding: 6px 18px;
-      border-radius: 8px;
-      background: var(--border);
-      color: var(--tof-accent);
-      border: 1px solid #1a4060;
-      font-size: 0.85rem;
-      font-weight: 600;
-      text-decoration: none;
-      cursor: pointer;
-    }
-    #depthDownloadLink.show { display: inline-block; }
-    #depthDownloadLink:hover { background: #0d3050; }
-
-    /* ── Footer stats (original) ── 
+    /* ── Footer stats (original) ── */
     .stats {
       text-align: center;
       padding: 10px;
@@ -315,7 +216,11 @@
     @media (max-width: 720px) {
       .cameras { flex-direction: column; align-items: center; }
       .panel   { max-width: 100%; }
-    }*/
+    }
+
+    /* ════════════════════════════════════════════════════════════
+       ToF SECTION — new styles only
+       ════════════════════════════════════════════════════════════ */
 
     .tof-section {
       margin: 0 20px 28px;
@@ -560,14 +465,13 @@
   <button class="btn-snap"  onclick="send('trigger_capture')">📸 Capture Now</button>
   <button class="btn-start" id="btnStart" onclick="send('start_auto')">▶ Start Auto</button>
   <button class="btn-stop"  id="btnStop"  onclick="send('stop_auto')">⏹ Stop Auto</button>
-  <button class="btn-ota"   id="btnOta"   onclick="send('request_ota')">⬆ OTA Update</button>
 </div>
 
 <div class="cameras">
   <!-- Camera 2 -->
   <div class="panel">
     <div class="panel-header">
-      <h2>📷 Camera 2 <span class="cam-fw" id="fw2">v—</span></h2>
+      <h2>📷 Camera 2</h2>
       <span class="meta" id="meta2">—</span>
     </div>
     <div class="view">
@@ -579,7 +483,7 @@
   <!-- Camera 1 -->
   <div class="panel">
     <div class="panel-header">
-      <h2>📷 Camera 1 <span class="cam-fw" id="fw1">v—</span></h2>
+      <h2>📷 Camera 1</h2>
       <span class="meta" id="meta1">—</span>
     </div>
     <div class="view">
@@ -595,20 +499,6 @@
 </div>
 
 <div class="stats" id="stats">Connecting …</div>
-
-<!-- ════════════════════════════════════════════════════════════
-     STEREO DEPTH MAP PANEL
-     ════════════════════════════════════════════════════════════ -->
-<div class="depth-panel" id="depthPanel">
-  <div class="depth-panel-header">
-    <h2 id="depthPanelTitle">⊡ Stereo Depth Map</h2>
-    <a id="depthDownloadLink" download="depthmap.png">⬇ Save Result</a>
-  </div>
-  <div class="depth-panel-body">
-    <div class="depth-status" id="depthStatus"></div>
-    <img id="depthResultImg" alt="Stereo depth map" />
-  </div>
-</div>
 
 <!-- ════════════════════════════════════════════════════════════
      ToF SECTION — appended below existing content
@@ -706,6 +596,49 @@
 // ORIGINAL CODE — preserved exactly
 // ─────────────────────────────────────────────────────────────
 
+class RowList {
+  constructor(container, { maxRows = 200, imgId = null, phId = null } = {}) {
+    this.container = container;
+    this.maxRows = maxRows;
+    this.imgId = imgId;
+    this.phId = phId;
+  }
+  add(timeText, metaText) {
+    const row = document.createElement('div');
+    row.className = 'list-row';
+    const time = document.createElement('div');
+    time.className = 'time';
+    time.textContent = timeText;
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = metaText;
+    row.appendChild(time);
+    row.appendChild(meta);
+    this.container.insertBefore(row, this.container.firstChild);
+    // when an image url is attached later, clicking the row will display it in the associated view
+    row.addEventListener('click', () => {
+      const url = row.dataset.url;
+      if (!url) return;
+      const img = this.imgId ? document.getElementById(this.imgId) : null;
+      const ph  = this.phId  ? document.getElementById(this.phId)  : null;
+      if (!img) return;
+      // set the saved URL (data: URL) onto the view — do not revoke here
+      img.src = url;
+      img.classList.add('show');
+      if (ph) ph.classList.add('hide');
+    });
+    while (this.container.children.length > this.maxRows) {
+      this.container.removeChild(this.container.lastChild);
+    }
+  }
+  // attachUrl lets caller associate a blob/object URL with the last inserted row
+  attachUrl(url) {
+    const first = this.container.firstChild;
+    if (first) first.dataset.url = url;
+  }
+  clear() { this.container.innerHTML = ''; }
+}
+
 /* ── state ── */
 let ws;
 let reconnectTimer;
@@ -723,10 +656,15 @@ const $dotCam2   = document.getElementById('dotCam2');
 const $btnStart  = document.getElementById('btnStart');
 const $btnStop   = document.getElementById('btnStop');
 const $stats     = document.getElementById('stats');
-const $fw1       = document.getElementById('fw1');
-const $fw2       = document.getElementById('fw2');
+const $list1     = document.getElementById('list1');
+const $list2     = document.getElementById('list2');
+// create persistent RowList instances for each camera and wire them to the proper view
+const rows1 = new RowList($list1, { maxRows: 300, imgId: 'img1', phId: 'ph1' });
+const rows2 = new RowList($list2, { maxRows: 300, imgId: 'img2', phId: 'ph2' });
 
-const firmwareByCam = { cam1: null, cam2: null };
+// Fixed: instantiate once, not on every message
+const list1 = new RowList($list1, { maxRows: 300 });
+const list2 = new RowList($list2, { maxRows: 300 });
 
 /* ── helpers ── */
 function send(msg) {
@@ -735,18 +673,6 @@ function send(msg) {
 function setDot(el, cls) {
   el.classList.remove('on-blue', 'on-green');
   if (cls) el.classList.add(cls);
-}
-
-function setFirmwareIfPresent(camId, version) {
-  if (typeof version === 'string' && version.trim()) firmwareByCam[camId] = version.trim();
-}
-
-function renderFirmwareLabels(masterPending, slavePending) {
-  const fwText1 = firmwareByCam.cam1 || 'v—';
-  const fwText2 = firmwareByCam.cam2 || 'v—';
-
-  if ($fw1) $fw1.textContent = masterPending ? `${fwText1} (to be updated)` : fwText1;
-  if ($fw2) $fw2.textContent = slavePending ? `${fwText2} (to be updated)` : fwText2;
 }
 
 /* ── WebSocket ── */
@@ -773,29 +699,6 @@ function connect() {
         setDot($dotCam2, m.cameras.includes('cam2') ? 'on-green' : null);
         $btnStart.style.opacity = m.captureActive ? 0.45 : 1;
         $btnStop.style.opacity  = m.captureActive ? 1    : 0.45;
-
-        const masterPending = !!m.masterOTAPending;
-        const slavePending  = !!m.slaveOTAPending;
-        const anyPending    = masterPending || slavePending;
-
-        if (m.firmwareVersions && typeof m.firmwareVersions === 'object') {
-          setFirmwareIfPresent('cam1', m.firmwareVersions.cam1);
-          setFirmwareIfPresent('cam2', m.firmwareVersions.cam2);
-        }
-        renderFirmwareLabels(masterPending, slavePending);
-
-        const $btnOta = document.getElementById('btnOta');
-        if ($btnOta) {
-          const queuedTargets = [
-            masterPending ? 'master' : null,
-            slavePending ? 'slave' : null
-          ].filter(Boolean).join(' + ');
-
-          $btnOta.classList.toggle('queued', anyPending);
-          $btnOta.title = anyPending
-            ? `OTA queued (${queuedTargets}) — device will update on next wakeup`
-            : 'Request OTA firmware update';
-        }
         return;
       }
 
@@ -819,29 +722,51 @@ function connect() {
     const camId = new TextDecoder().decode(buf.slice(0, colon1));
     const tsStr = new TextDecoder().decode(buf.slice(colon1 + 1, colon2));
     const jpeg  = buf.slice(colon2 + 1);
+    // let colon = -1;
+    // for (let i = 0; i < Math.min(buf.length, 10); i++) {
+    //   if (buf[i] === 0x3A) { colon = i; break; }      // ':'
+    // }
+    // if (colon < 1){ return;}
 
-    const blob = new Blob([jpeg], { type: 'image/jpeg' });
-    const url  = URL.createObjectURL(blob);
-    console.log(url);
+    // const camId = new TextDecoder().decode(buf.slice(0, colon));
+    // const jpeg  = buf.slice(colon + 1);
+    const blob  = new Blob([jpeg], { type: 'image/jpeg' });
 
-    const num  = camId === 'cam1' ? '1' : '2';
-    const img  = document.getElementById('img'  + num);
-    const ph   = document.getElementById('ph'   + num);
-    const meta = document.getElementById('meta' + num);
-    if (!img) return;
+    // convert to a stable data URL so saved list entries remain valid later
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result; // "data:image/jpeg;base64,...."
 
-    if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
-    img.src = url;
-    img.classList.add('show');
-    ph.classList.add('hide');
+      const num = camId === 'cam1' ? '1' : '2';
+      const img = document.getElementById('img' + num);
+      const ph  = document.getElementById('ph'  + num);
+      const meta = document.getElementById('meta' + num);
 
-    frames[camId] = (frames[camId] || 0) + 1;
-    const sizeKB = (jpeg.length / 1024).toFixed(1) + ' KB';
-    meta.textContent = `${sizeKB} KB  ·  #${frames[camId]}`;
-    addOrUpdatePair(tsStr, camId, jpeg, frames[camId], sizeKB);
+      if (!img) return;
 
-    $stats.textContent =
-      `Frames — Cam1: ${frames.cam1}  |  Cam2: ${frames.cam2}  |  Total: ${frames.cam1 + frames.cam2}`;
+      // set image using the stable data URL
+      img.src = dataUrl;
+      img.classList.add('show');
+      if (ph) ph.classList.add('hide');
+
+      frames[camId] = (frames[camId] || 0) + 1;
+      // add to appropriate per-camera list
+      const sizeKB = (jpeg.length / 1024).toFixed(1) + ' KB';
+      meta.textContent = `${sizeKB} KB  ·  #${frames[camId]}`;
+      const rowMeta = `#${frames[camId]} · ${sizeKB}`;
+
+      if (camId === 'cam1') {
+        rows1.add(tsStr, rowMeta);
+        rows1.attachUrl(dataUrl);
+      } else if (camId === 'cam2') {
+        rows2.add(tsStr, rowMeta);
+        rows2.attachUrl(dataUrl);
+      }
+
+      $stats.textContent =
+        `Frames — Cam1: ${frames.cam1}  |  Cam2: ${frames.cam2}  |  Total: ${frames.cam1 + frames.cam2}`;
+    };
+    reader.readAsDataURL(blob);
   };
 
   ws.onclose = () => {
@@ -903,32 +828,16 @@ function addOrUpdatePair(tsStr, camId, jpeg, frameNum, sizeKB) {
     dlBtn.textContent = '\u2b07';
     dlBtn.addEventListener('click', e => { e.stopPropagation(); downloadPair(tsStr); });
 
-    const depthBtn = document.createElement('button');
-    depthBtn.className   = 'btn-depth';
-    depthBtn.title       = 'Compute stereo depth map';
-    depthBtn.textContent = '⊡ Depth';
-    depthBtn.disabled    = true;
-    depthBtn.addEventListener('click', e => { e.stopPropagation(); requestStereoView(tsStr, 'depth'); });
-
-    const undistortBtn = document.createElement('button');
-    undistortBtn.className   = 'btn-undistort';
-    undistortBtn.title       = 'Show rectified undistorted pair';
-    undistortBtn.textContent = '◫ Undistort';
-    undistortBtn.disabled    = true;
-    undistortBtn.addEventListener('click', e => { e.stopPropagation(); requestStereoView(tsStr, 'undistort'); });
-
     rowEl.appendChild(tsSpan);
     rowEl.appendChild(badge1El);
     rowEl.appendChild(badge2El);
     rowEl.appendChild(dlBtn);
-    rowEl.appendChild(depthBtn);
-    rowEl.appendChild(undistortBtn);
     rowEl.addEventListener('click', () => showPair(tsStr));
 
     const $pairList = document.getElementById('pairList');
     $pairList.insertBefore(rowEl, $pairList.firstChild);
 
-    pairMap.set(tsStr, { cam1: null, cam2: null, rowEl, badge1El, badge2El, depthBtn, undistortBtn });
+    pairMap.set(tsStr, { cam1: null, cam2: null, rowEl, badge1El, badge2El });
   }
 
   const entry   = pairMap.get(tsStr);
@@ -937,12 +846,6 @@ function addOrUpdatePair(tsStr, camId, jpeg, frameNum, sizeKB) {
   const badgeEl = camId === 'cam1' ? entry.badge1El : entry.badge2El;
   badgeEl.textContent = `Cam ${camId === 'cam1' ? '1' : '2'}: ${sizeKB}`;
   badgeEl.classList.remove('missing');
-
-  // Enable depth button once both images have arrived
-  if (entry.cam1 && entry.cam2) {
-    if (entry.depthBtn) entry.depthBtn.disabled = false;
-    if (entry.undistortBtn) entry.undistortBtn.disabled = false;
-  }
 }
 
 function showPair(tsStr) {
@@ -983,158 +886,6 @@ function downloadPair(tsStr) {
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// STEREO DEPTH MAP REQUEST
-// ─────────────────────────────────────────────────────────────
-
-let depthBlobUrl = null;   // revoke previous result when a new one arrives
-
-function buildStereoFormData(entry, mode) {
-  const fd = new FormData();
-  fd.append('cam1', entry.cam1.blob, 'cam1.jpg');
-  fd.append('cam2', entry.cam2.blob, 'cam2.jpg');
-  fd.append('viewMode', mode);
-  return fd;
-}
-
-function downloadBlob(blob, fileName) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
-}
-
-async function downloadUndistortedPair(tsStr) {
-  const entry = pairMap.get(tsStr);
-  if (!entry || !entry.cam1 || !entry.cam2) return;
-
-  const statusEl = document.getElementById('depthStatus');
-  const dlLink = document.getElementById('depthDownloadLink');
-  const prevLabel = dlLink.textContent;
-
-  try {
-    dlLink.textContent = 'Preparing cam1/cam2 files…';
-
-    const resCam1 = await fetch('/api/depthmap', {
-      method: 'POST',
-      body: buildStereoFormData(entry, 'undistort_cam1'),
-    });
-    if (!resCam1.ok) {
-      const err = await resCam1.json().catch(() => ({ error: `HTTP ${resCam1.status}` }));
-      throw new Error(err.error || `HTTP ${resCam1.status}`);
-    }
-    const cam1Blob = await resCam1.blob();
-
-    const resCam2 = await fetch('/api/depthmap', {
-      method: 'POST',
-      body: buildStereoFormData(entry, 'undistort_cam2'),
-    });
-    if (!resCam2.ok) {
-      const err = await resCam2.json().catch(() => ({ error: `HTTP ${resCam2.status}` }));
-      throw new Error(err.error || `HTTP ${resCam2.status}`);
-    }
-    const cam2Blob = await resCam2.blob();
-
-    downloadBlob(cam1Blob, `cam1_undistorted_${tsStr}.png`);
-    downloadBlob(cam2Blob, `cam2_undistorted_${tsStr}.png`);
-    statusEl.textContent = `Undistorted cam1/cam2 saved · pair ${tsStr}`;
-  } catch (e) {
-    statusEl.textContent = 'Error: ' + e.message;
-    statusEl.className = 'depth-status error';
-  } finally {
-    dlLink.textContent = prevLabel;
-  }
-}
-
-async function requestStereoView(tsStr, viewMode) {
-  const entry = pairMap.get(tsStr);
-  if (!entry || !entry.cam1 || !entry.cam2) return;
-
-  const mode = viewMode === 'undistort' ? 'undistort' : 'depth';
-
-  const activeBtn  = mode === 'undistort' ? entry.undistortBtn : entry.depthBtn;
-  const idleBtn    = mode === 'undistort' ? entry.depthBtn : entry.undistortBtn;
-  const panel      = document.getElementById('depthPanel');
-  const titleEl    = document.getElementById('depthPanelTitle');
-  const statusEl   = document.getElementById('depthStatus');
-  const resultImg  = document.getElementById('depthResultImg');
-  const dlLink     = document.getElementById('depthDownloadLink');
-
-  // Reset UI
-  if (activeBtn) {
-    activeBtn.disabled = true;
-    activeBtn.textContent = mode === 'undistort' ? 'Working…' : 'Computing…';
-  }
-  if (idleBtn) idleBtn.disabled = true;
-  panel.classList.add('visible');
-  titleEl.textContent = mode === 'undistort' ? '◫ Undistorted Stereo Pair' : '⊡ Stereo Depth Map';
-  statusEl.textContent = 'Sending images to server…';
-  statusEl.className   = 'depth-status';
-  resultImg.classList.remove('show');
-  dlLink.classList.remove('show');
-  dlLink.onclick = null;
-
-  const fd = buildStereoFormData(entry, mode);
-
-  try {
-    statusEl.textContent = mode === 'undistort'
-      ? 'Rectifying and undistorting stereo pair…'
-      : 'Computing depth map (SGBM)…';
-    const res = await fetch('/api/depthmap', { method: 'POST', body: fd });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-      throw new Error(err.error || `HTTP ${res.status}`);
-    }
-
-    const blob = await res.blob();
-
-    // Revoke previous result URL to avoid memory leak
-    if (depthBlobUrl) URL.revokeObjectURL(depthBlobUrl);
-    depthBlobUrl = URL.createObjectURL(blob);
-
-    resultImg.src = depthBlobUrl;
-    resultImg.classList.add('show');
-
-    if (mode === 'undistort') {
-      dlLink.href = '#';
-      dlLink.removeAttribute('download');
-      dlLink.onclick = (ev) => {
-        ev.preventDefault();
-        downloadUndistortedPair(tsStr);
-      };
-      dlLink.textContent = '⬇ Save Undistorted Pair';
-    } else {
-      dlLink.onclick = null;
-      dlLink.href = depthBlobUrl;
-      dlLink.download = `depthmap_${tsStr}.png`;
-      dlLink.textContent = '⬇ Save Depth Map';
-    }
-    dlLink.classList.add('show');
-
-    statusEl.textContent = mode === 'undistort'
-      ? `Undistorted pair ready · pair ${tsStr}`
-      : `Depth map ready · pair ${tsStr}`;
-
-  } catch (e) {
-    statusEl.textContent = 'Error: ' + e.message;
-    statusEl.className   = 'depth-status error';
-  } finally {
-    if (entry.depthBtn) {
-      entry.depthBtn.disabled = false;
-      entry.depthBtn.textContent = '⊡ Depth';
-    }
-    if (entry.undistortBtn) {
-      entry.undistortBtn.disabled = false;
-      entry.undistortBtn.textContent = '◫ Undistort';
-    }
   }
 }
 
