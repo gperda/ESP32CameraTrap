@@ -466,6 +466,7 @@ void setup() {
 void loop() {
 
   if (shouldCapture) {
+    Serial.println("ShoulCapture loop");
     initCamera();
     //Serial.printf("Sync timestamp: %llu us\n", captureTimestamp);
     uint8_t ack = 0xCC;

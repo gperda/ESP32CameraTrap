@@ -95,6 +95,7 @@ volatile bool isUpToDate = false;
 
 // ── Initialise the VL53L5CX once per wake cycle ─────────────────────────────
 bool initToF() {
+  digitalWrite(TOF_SENSOR_PIN, HIGH);
   Wire.begin(TOF_SDA_PIN, TOF_SCL_PIN);
   Wire.setClock(TOF_I2C_SPEED);
 
@@ -424,6 +425,7 @@ void setup() {
   pinMode(TO_SLAVE_PIN, OUTPUT);
   digitalWrite(TO_SLAVE_PIN, LOW);
   pinMode(TOF_SENSOR_PIN, OUTPUT);
+  digitalWrite(TOF_SENSOR_PIN, LOW);
   sdmmcInit();
   initEspNow();
   ws2812Init();
@@ -457,7 +459,7 @@ void setup() {
     SyncPacket signal;
     signal.type = 0x04;
     Serial.print("Slave send: ");
-    esp_now_send(slaveMAC, (uint8_t*)&signal, sizeof(signal));
+    Serial.print(esp_now_send(slaveMAC, (uint8_t*)&signal, sizeof(signal)));
     unsigned long t = millis();
     while (!(slaveReady) && millis() - t < 2000);
     connectToWiFi();
@@ -513,7 +515,6 @@ void setup() {
 
   initCamera();
   createDir(SD_MMC, "/camera");
-  digitalWrite(TOF_SENSOR_PIN, HIGH);
 
   tofInitialised = initToF();
 
@@ -534,7 +535,7 @@ void setup() {
       ackReceived = false;
       slaveReady  = false;
       Serial.print("Slave capture signal: ");
-      esp_now_send(slaveMAC, (uint8_t*)&pkt, sizeof(pkt));
+      Serial.println(esp_now_send(slaveMAC, (uint8_t*)&pkt, sizeof(pkt)));
 
       unsigned long t = millis();
       while (!(ackReceived && slaveReady) && millis() - t < 2000);
@@ -552,7 +553,8 @@ void setup() {
     // delay(4000);
     elapsedTime = esp_timer_get_time() - startTime;
   } while (elapsedTime < TOF_SENSOR_WAIT_TIME_US);
-
+  if(tofInitialised)
+    tofSensor.stopRanging();
   Serial.printf("Elapsed time %llu\n", elapsedTime);
   goToSleep();
 }
