@@ -101,7 +101,7 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
 });
 
 // ─── WebSocket server on /ws ───
-const wss = new WebSocket.Server({ server, path: '/ws' });
+const wss = new WebSocket.Server({ server, path: '/ws'/*, perMessageDeflate: false*/});
 
 // Bookkeeping
 const espClients     = new Map();    // camId → ws

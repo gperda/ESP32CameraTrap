@@ -9,7 +9,7 @@
  */
 
 #include <WiFi.h>
-#include <ArduinoWebsockets.h>
+#include <WebSocketsClient.h>
 #include "esp_camera.h"
 #define CAMERA_MODEL_ESP32S3_EYE
 #include <camera_pins.h>
@@ -25,8 +25,6 @@
 #include "driver/rtc_io.h"
 #include <ota_update.h>
 
-using namespace websockets;
-
 // =================== CONFIGURATION ===================
 #define CAMERA_ID "cam2"   // ← This is the only difference from cam1
 #define MAX_FRAME_SIZE 1048576
@@ -38,20 +36,46 @@ using namespace websockets;
 #define MAX_WS_WAIT_TIME_MS 4000
 #define MAX_WIFI_WAIT_TIME_MS 6000
 
-const char* ssid     = "Redmi Note 11S";
-const char* password = "donatella";
+#ifndef CF_ACCESS_CLIENT_ID
+#define CF_ACCESS_CLIENT_ID
+#endif
 
-// Point this at the IP running server.js
-//const char* ws_url = "ws://10.167.166.163:3000/ws";
-const char* server_hostname = "3dom";
-const uint16_t server_port = 3000;
+#ifndef CF_ACCESS_CLIENT_SECRET
+#define CF_ACCESS_CLIENT_SECRET
+#endif
+
+#ifndef MYSSID
+#define MYSSID
+#endif
+
+#ifndef MYPASSWORD
+#define MYPASSWORD
+#endif
+
+#ifndef WS_URL
+#define WS_URL
+#endif
+
+#ifndef REGISTER_TOKEN
+#define REGISTER_TOKEN
+#endif
+
+#define STRINGIFY_IMPL(x) #x
+#define STRINGIFY(x) STRINGIFY_IMPL(x)
+
+String normalizeBuildFlagString(const char* rawValue) {
+  String value = String(rawValue);
+  if (value.length() >= 2 && value[0] == '"' && value[value.length() - 1] == '"') {
+    value = value.substring(1, value.length() - 1);
+  }
+  return value;
+}
+// const char* server_hostname = "3dom";
+// const uint16_t server_port = 3000;
 
 //String ws_url;
-String ws_url = "";
-const char* REGISTER_TOKEN = "reg-token";
-
 // =================== Globals ===================
-WebsocketsClient client;
+WebSocketsClient client;
 bool wsConnected             = false;
 unsigned long lastReconnect  = 0;
 const unsigned long RECONNECT_MS = 5000;
@@ -95,6 +119,9 @@ volatile bool shouldOTA = false;
 volatile bool isUpToDate = false;
 // uint64_t* timestampsToSend = nullptr;
 // volatile uint64_t framesCount = 0;
+
+
+extern const char ca_cert_start[] asm("_binary_ca_cert_start");
 
 struct_message out_msg;
 struct_message in_msg;
@@ -162,51 +189,46 @@ int initCamera(void) {
   return 1;
 }
 
-bool resolveServer() {
-  IPAddress serverIP = MDNS.queryHost(server_hostname);
-  if (serverIP == IPAddress(0, 0, 0, 0)) return false;
-  ws_url = "ws://" + serverIP.toString() + ":" + String(server_port) + "/ws";
-  Serial.printf("Resolved %s\n", ws_url.c_str());
-  return true;
-}
+// bool resolveServer() {
+//   IPAddress serverIP = MDNS.queryHost(server_hostname);
+//   if (serverIP == IPAddress(0, 0, 0, 0)) return false;
+//   ws_url = "ws://" + serverIP.toString() + ":" + String(server_port) + "/ws";
+//   Serial.printf("Resolved %s\n", ws_url.c_str());
+//   return true;
+// }
 
 uint64_t timems(struct timeval tv_now){
   return (uint64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
 }
 
 // =================== WebSocket Callbacks ===================
-void onMessage(WebsocketsMessage msg) {
-  if (msg.isText()) {
-    String data = msg.data();
-    Serial.printf("← %s\n", data.c_str());
-    if (data == "capture") {
-      shouldCapture = true;
-    }
-    if (data == "slave_ota_update"){
-      shouldOTA = true;
-      otaPendingRTC = true;
-    }
-  }
-}
-
-void onEvent(WebsocketsEvent event, String data) {
-  switch (event) {
-    case WebsocketsEvent::ConnectionOpened:
+void onWsEvent(WStype_t type, uint8_t * payload, size_t length) {
+  switch (type) {
+    case WStype_CONNECTED:
       Serial.println("WS: connected");
       wsConnected = true;
-      // client.send("register:" CAMERA_ID);
-      client.send("register:" CAMERA_ID ":" + String(REGISTER_TOKEN) + ":" + String(FIRMWARE_VERSION));
+      client.sendTXT("register:" CAMERA_ID ":" + normalizeBuildFlagString(STRINGIFY(REGISTER_TOKEN)) + ":" + String(FIRMWARE_VERSION));
       break;
-
-    case WebsocketsEvent::ConnectionClosed:
+    case WStype_DISCONNECTED:
       Serial.println("WS: disconnected");
       wsConnected = false;
       break;
-
-    case WebsocketsEvent::GotPing:
+    case WStype_TEXT:
+      if (payload && length > 0) {
+        String data = String((char*)payload);
+        Serial.printf("\u2190 %s\n", data.c_str());
+        if (data == "capture") {
+          shouldCapture = true;
+        }
+        if (data == "slave_ota_update"){
+          shouldOTA = true;
+          otaPendingRTC = true;
+        }
+      }
       break;
-
-    case WebsocketsEvent::GotPong:
+    case WStype_PING:
+    case WStype_PONG:
+    default:
       break;
   }
 }
@@ -242,52 +264,71 @@ void onReceive(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
         // memcpy(timestampsToSend, data + sizeof(SyncPacket), framesCount * sizeof(uint64_t));
 }
 
-void connectToWiFi(){
+void connectToWiFi() {
   WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
+  WiFi.begin(STRINGIFY(MYSSID), STRINGIFY(MYPASSWORD));
   WiFi.setSleep(false);
-
   Serial.print("WiFi ");
+  
   unsigned long t = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() -t < MAX_WIFI_WAIT_TIME_MS) {
-    delay(500);
-    Serial.print(".");
-  }
-  if(WiFi.status() == WL_CONNECTED){
+  while (WiFi.status() != WL_CONNECTED && millis() -t < MAX_WIFI_WAIT_TIME_MS) { delay(500); Serial.print("."); }
+  if(WiFi.status() == WL_CONNECTED){    
+    WiFi.config(WiFi.localIP(), WiFi.gatewayIP(), WiFi.subnetMask(),
+                IPAddress(1,1,1,1), IPAddress(8,8,8,8));
     Serial.printf(" OK  IP=%s\n", WiFi.localIP().toString().c_str());
-    if (!MDNS.begin(CAMERA_ID)){
+  
+    if (!MDNS.begin(CAMERA_ID))
       Serial.println("mDNS init failed");
-    }else{
+    else
       Serial.printf("mDNS started. Device is %s.local\n", CAMERA_ID);
-    }
   }
 }
 
+bool waitForWsConnected(uint32_t timeoutMs) {
+  unsigned long t0 = millis();
+  while (millis() - t0 < timeoutMs) {
+    client.loop();
+    if (client.isConnected()) {
+      return true;
+    }
+    delay(5);
+  }
+  return client.isConnected();
+}
 
-// =================== Connect ===================
+
+// =================== Connect to WS ===================
 void connectWS() {
   if(WiFi.status() == WL_CONNECTED){
-    bool serverResolved = false;
-    if (ws_url.isEmpty()) {
-      Serial.printf("Resolving %s.local", server_hostname);
-      unsigned long t = millis();
-      serverResolved = resolveServer();
-      while (!serverResolved && millis() - t < MAX_WS_WAIT_TIME_MS) { delay(500); Serial.print("."); }
-    }
-
+    //bool serverResolved = false;
+    bool serverResolved = true;
+    // if (ws_url.isEmpty()) {
+    //   Serial.printf("Resolving %s.local", server_hostname);
+    //   unsigned long t = millis();
+    //   serverResolved = resolveServer();
+    //   while (!serverResolved && millis() - t < MAX_WS_WAIT_TIME_MS) { delay(500); Serial.print("."); }
+    // }
     if(serverResolved){
-      Serial.printf("Connecting to %s …\n", ws_url.c_str());
-      client.onMessage(onMessage);
-      client.onEvent(onEvent);
-      client.setInsecure();
-      bool ok = client.connect(ws_url.c_str());
-      if (!ok) {
-        Serial.println("WS connection failed — will retry");
-        ws_url = "";
+      Serial.printf("\nConnecting to %s …\n", STRINGIFY(WS_URL));
+      String cfClientId = normalizeBuildFlagString(STRINGIFY(CF_ACCESS_CLIENT_ID));
+      String cfClientSecret = normalizeBuildFlagString(STRINGIFY(CF_ACCESS_CLIENT_SECRET));
+      if (cfClientId.length() > 0 && cfClientSecret.length() > 0) {
+        String accessHeaders =
+          String("CF-Access-Client-Id: ") + cfClientId + "\r\n" +
+          "CF-Access-Client-Secret: " + cfClientSecret;
+        client.setExtraHeaders(accessHeaders.c_str());
+      }
+      client.beginSslWithCA(STRINGIFY(WS_URL), 443, "/ws", ca_cert_start);
+      client.onEvent(onWsEvent);
+      bool wsReady = waitForWsConnected(MAX_WS_WAIT_TIME_MS);
+      if (!wsReady) {
+        Serial.println("WS did not reach connected state within timeout");
       }
     }
   }
 }
+
+
 
 // =================== Send from SD (single reused buffer) ===================
 // Reads the JPEG directly into g_sendBuf (after the Header) and sends it.
@@ -334,14 +375,12 @@ void sendFromSD(uint64_t timestamp) {
   Serial.printf("Sending %s — header: %u B, jpeg: %u B, total: %u B\n",
                 path.c_str(), sizeof(Header), fileSize, totalLen);
 
-  if (!client.available()) {
+  if (client.isConnected()) {
+    client.sendBIN((const uint8_t*)g_sendBuf, totalLen);
+    Serial.println("WS send OK");
+  } else {
     Serial.println("WS not available, skipping send");
-    return;
   }
-
-  bool ret = client.sendBinary((const char*)g_sendBuf, totalLen);
-  Serial.println(ret ? "WS send OK" : "WS send Error");
-  // delay(100);
 }
 
 
@@ -487,10 +526,10 @@ void loop() {
     connectWS();
     unsigned long pollEnd = millis() + 1000;
     while (millis() < pollEnd) {
-      client.poll();
+      client.loop();
       delay(10);
     }
-    if(WiFi.status() == WL_CONNECTED && ws_url != ""){
+    if(WiFi.status() == WL_CONNECTED && client.isConnected()){
       // Allocate the single send buffer from PSRAM once at startup
       g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
       if (!g_sendBuf) {
@@ -505,7 +544,6 @@ void loop() {
       free(g_sendBuf);
       deleteFile(SD_MMC, "/sendlist.txt");
       removeDirRecursive(SD_MMC, "/camera");
-      //free((void*)timestampsToSend);
     } else {
       Serial.println("WiFi currently unavailable, will send later");
     }

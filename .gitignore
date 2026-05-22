@@ -14,3 +14,8 @@ node_modules
 Thumbs.db
 
 .esp32venv/
+ca.cert
+
+# Local build secrets
+master_camera/secrets.ini
+slave_camera/secrets.ini
