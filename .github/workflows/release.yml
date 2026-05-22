@@ -34,6 +34,18 @@ jobs:
       - name: Install PlatformIO
         run: pip install platformio
 
+      - name: Prepare CA certificate files
+        env:
+          CA_CERT_PEM: ${{ secrets.CA_CERT_PEM }}
+        run: |
+          if [ -z "$CA_CERT_PEM" ]; then
+            echo "Missing required secret: CA_CERT_PEM"
+            exit 1
+          fi
+
+          printf '%s\n' "$CA_CERT_PEM" > master_camera/ca.cert
+          printf '%s\n' "$CA_CERT_PEM" > slave_camera/ca.cert
+
       - name: Build master_camera
         run: |
           cd master_camera
