@@ -46,6 +46,44 @@ jobs:
           printf '%s\n' "$CA_CERT_PEM" > master_camera/ca.cert
           printf '%s\n' "$CA_CERT_PEM" > slave_camera/ca.cert
 
+      - name: Prepare PlatformIO secrets
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          MYSSID: ${{ secrets.MYSSID }}
+          MYPASSWORD: ${{ secrets.MYPASSWORD }}
+          REGISTER_TOKEN: ${{ secrets.REGISTER_TOKEN }}
+          WS_URL: ${{ secrets.WS_URL }}
+        run: |
+          for value_name in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET MYSSID MYPASSWORD REGISTER_TOKEN WS_URL; do
+            if [ -z "${!value_name}" ]; then
+              echo "Missing required secret: $value_name"
+              exit 1
+            fi
+          done
+
+          cat > master_camera/secrets.ini <<EOF
+          [env:freenove_esp32_s3_wroom]
+          build_flags =
+            -D CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID}"
+            -D CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET}"
+            -D MYSSID="${MYSSID}"
+            -D MYPASSWORD="${MYPASSWORD}"
+            -D REGISTER_TOKEN="${REGISTER_TOKEN}"
+            -D WS_URL="${WS_URL}"
+          EOF
+
+          cat > slave_camera/secrets.ini <<EOF
+          [env:freenove_esp32_s3_wroom]
+          build_flags =
+            -D CF_ACCESS_CLIENT_ID="${CF_ACCESS_CLIENT_ID}"
+            -D CF_ACCESS_CLIENT_SECRET="${CF_ACCESS_CLIENT_SECRET}"
+            -D MYSSID="${MYSSID}"
+            -D MYPASSWORD="${MYPASSWORD}"
+            -D REGISTER_TOKEN="${REGISTER_TOKEN}"
+            -D WS_URL="${WS_URL}"
+          EOF
+
       - name: Build master_camera
         run: |
           cd master_camera
