@@ -28,7 +28,7 @@
 // =================== CONFIGURATION ===================
 #define CAMERA_ID "cam2"   // ← This is the only difference from cam1
 #define MAX_FRAME_SIZE 1048576
-#define FIRMWARE_VERSION  "v2.1.1"
+#define FIRMWARE_VERSION  "v2.1.2"
 #define FIRMWARE_DEVICE   "slave_camera"
 #define GITHUB_REPO       "gperda/ESP32CameraTrap"
 #define TRIGGER_WAKEUP_PIN GPIO_NUM_21
@@ -110,8 +110,10 @@ struct SyncPacket {
 
 volatile bool shouldCapture = false;
 volatile bool shouldSend    = false;
-volatile bool shouldConnect = false;
-volatile bool shouldSleep   = false;
+volatile bool doSend = false;
+volatile bool doCapture = false;
+volatile bool didWork = false;
+
 volatile uint64_t captureTimestamp = 0;
 
 RTC_DATA_ATTR bool otaPendingRTC = false;
@@ -250,10 +252,6 @@ void onReceive(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
         uint8_t ack      = 0xBB;
         Serial.print("Capture signal: ");
         esp_now_send(masterMAC, &ack, 1);
-    } else if (pkt.type == 0x02) {
-        shouldConnect = true;
-    } else if (pkt.type == 0x03){
-        shouldSleep = true;
     } else if (pkt.type == 0x04){
         Serial.println("Received send signal");
         shouldSend = true;
@@ -367,9 +365,7 @@ void sendFromSD(uint64_t timestamp) {
   hdr->data_len  = fileSize;
 
   size_t totalLen = sizeof(Header) + fileSize;
-
-  Serial.printf("Sending %s — header: %u B, jpeg: %u B, total: %u B\n",
-                path.c_str(), sizeof(Header), fileSize, totalLen);
+  Serial.printf("Sending %s — %u B total\n", path.c_str(), totalLen);
 
   if (client.isConnected()) {
     client.sendBIN((const uint8_t*)g_sendBuf, totalLen);
@@ -504,8 +500,10 @@ void setup() {
 
 // =================== Arduino Loop ===================
 void loop() {
+  if (shouldCapture) { doCapture = true; shouldCapture = false; }
+  if (shouldSend)    { doSend = true;    shouldSend = false; }
 
-  if (shouldCapture) {
+  if (doCapture) {
     Serial.println("ShoulCapture loop");
     initCamera();
     //Serial.printf("Sync timestamp: %llu us\n", captureTimestamp);
@@ -514,14 +512,17 @@ void loop() {
     esp_now_send(masterMAC, &ack, 1);
     if(captureToSD(captureTimestamp) == 0)
         Serial.println("Error with capture");
+    didWork = true;
   } 
-  if (shouldSend) {
+  if (doSend) {
     ws2812SetColor(3);
     uint8_t ack = 0xCC;
     Serial.print("Slave ready: ");
     esp_now_send(masterMAC, &ack, 1);
     std::vector<String> flist = getSendList(SD_MMC, "/sendlist.txt");
     esp_now_deinit();
+
+    // Listen for incoming WS messages
     connectToWiFi();
     connectWS();
     unsigned long pollEnd = millis() + 1000;
@@ -529,23 +530,24 @@ void loop() {
       client.loop();
       delay(10);
     }
-    if(WiFi.status() == WL_CONNECTED && client.isConnected()){
-      // Allocate the single send buffer from PSRAM once at startup
-      g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
-      if (!g_sendBuf) {
-        Serial.println("FATAL: Could not allocate send buffer in PSRAM");
-        while (true) delay(1000);  // Halt — nothing will work without this
-      }
-      
-      for (const String& line : flist) {
-        uint64_t value = strtoull(line.c_str(), nullptr, 10);
-        sendFromSD(value);
-      }
-      free(g_sendBuf);
-      deleteFile(SD_MMC, "/sendlist.txt");
-      removeDirRecursive(SD_MMC, "/camera");
-    } else {
-      Serial.println("WiFi currently unavailable, will send later");
+
+    if (!flist.empty()){
+      if(WiFi.status() == WL_CONNECTED && client.isConnected()){
+        // Allocate the single send buffer from PSRAM once at startup
+        g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
+        if (!g_sendBuf) {
+          Serial.println("FATAL: Could not allocate send buffer in PSRAM");
+          while (true) delay(1000);  // Halt — nothing will work without this
+        }
+        
+        for (const String& line : flist) {
+          uint64_t value = strtoull(line.c_str(), nullptr, 10);
+          sendFromSD(value);
+        }
+        free(g_sendBuf);
+        deleteFile(SD_MMC, "/sendlist.txt");
+        removeDirRecursive(SD_MMC, "/camera");
+      } else Serial.println("WiFi currently unavailable, will send later");
     }
     if (shouldOTA) {
       ws2812SetColor(3);
@@ -560,9 +562,11 @@ void loop() {
       }
       // on failure: otaPendingRTC stays true, retries next wakeup
     }
+    didWork = true;
   }
   
   // Sleep after doing something
-  if (shouldSend || shouldCapture)
-    goToSleep();
+  if (didWork)
+    if (!shouldSend && !shouldCapture)
+      goToSleep();
 }

@@ -22,7 +22,7 @@
 // =================== CONFIGURATION ===================
 #define CAMERA_ID       "cam1"   // "cam1" for board 1, "cam2" for board 2
 #define MAX_FRAME_SIZE  1048576
-#define FIRMWARE_VERSION  "v2.1.1"
+#define FIRMWARE_VERSION  "v2.1.2"
 #define FIRMWARE_DEVICE   "master_camera"
 #define GITHUB_REPO       "gperda/ESP32CameraTrap"
 #define MOTIONSENSOR_PIN GPIO_NUM_19
@@ -513,36 +513,38 @@ void setup() {
     SyncPacket signal;
     signal.type = 0x04;
     Serial.print("Slave send: ");
-    Serial.print(esp_now_send(slaveMAC, (uint8_t*)&signal, sizeof(signal)));
+    esp_now_send(slaveMAC, (uint8_t*)&signal, sizeof(signal));
     unsigned long t = millis();
     while (!(slaveReady) && millis() - t < 2000);
     connectToWiFi();
     connectWS();
 
+    // Listen to incoming messages
     unsigned long pollEnd = millis() + 1000;
     while (millis() < pollEnd) {
       client.loop();
       delay(10);
     }
-    if(WiFi.status() == WL_CONNECTED && client.isConnected()){
-      // // Allocate single send buffer from PSRAM
-      g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
-      if (!g_sendBuf) {
-        Serial.println("FATAL: Could not allocate send buffer in PSRAM");
-        while (true) delay(1000);
-      }
-      if (!g_sendBuf) { Serial.println("Send buffer not allocated"); return; }
-      for (const String& line : flist) {
-        uint64_t value = strtoull(line.c_str(), nullptr, 10);
-        sendFromSD(value);
-      }
-      free(g_sendBuf);
-      deleteFile(SD_MMC, "/sendlist.txt");
-      removeDirRecursive(SD_MMC, "/camera");
-    } else {
-      Serial.println("WiFi currently unavailable, will send later");
-    }
 
+    // If there is something to send
+    if(!flist.empty()){
+      if(WiFi.status() == WL_CONNECTED && client.isConnected()){
+        // // Allocate single send buffer from PSRAM
+        g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
+        if (!g_sendBuf) {
+          Serial.println("FATAL: Could not allocate send buffer in PSRAM");
+          while (true) delay(1000);
+        }
+        if (!g_sendBuf) { Serial.println("Send buffer not allocated"); return; }
+        for (const String& line : flist) {
+          uint64_t value = strtoull(line.c_str(), nullptr, 10);
+          sendFromSD(value);
+        }
+        free(g_sendBuf);
+        deleteFile(SD_MMC, "/sendlist.txt");
+        removeDirRecursive(SD_MMC, "/camera");
+      } else Serial.println("WiFi currently unavailable, will send later");
+    }
     // ── OTA (ota_update received during poll above) ───────────────────────
     if (otaRequested || otaPendingRTC) {
       ws2812SetColor(3);
