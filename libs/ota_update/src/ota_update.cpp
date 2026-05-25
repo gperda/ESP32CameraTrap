@@ -19,7 +19,7 @@ bool performOTAIfAvailable(const char* firmwareDevice,
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.addHeader("User-Agent", "ESP32");
   http.addHeader("Accept", "application/vnd.github+json");
-
+  Serial.printf("%s\n", releaseUrl);
   int code = http.GET();
   if (code != 200) {
     Serial.printf("[OTA] GitHub API returned %d\n", code);
