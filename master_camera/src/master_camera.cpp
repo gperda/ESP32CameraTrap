@@ -22,7 +22,7 @@
 // =================== CONFIGURATION ===================
 #define CAMERA_ID       "cam1"   // "cam1" for board 1, "cam2" for board 2
 #define MAX_FRAME_SIZE  1048576
-#define FIRMWARE_VERSION  "v2.1.1"
+#define FIRMWARE_VERSION  "v2.1.0"
 #define FIRMWARE_DEVICE   "master_camera"
 #define GITHUB_REPO       "gperda/ESP32CameraTrap"
 #define MOTIONSENSOR_PIN GPIO_NUM_19
@@ -480,6 +480,10 @@ void wakeSlave(){
 
 // =================== OTA Update ===================
 bool performOTAIfAvailable() {
+  if(client.isConnected()){
+    client.disconnect();
+    Serial.println("WS disconnected");
+  }
   return ::performOTAIfAvailable(FIRMWARE_DEVICE, FIRMWARE_VERSION, GITHUB_REPO, &isUpToDate);
 }
 

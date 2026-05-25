@@ -472,7 +472,11 @@ void initEspNow() {
 
 
 // =================== OTA Update ===================
-bool performOTAIfAvailable() {
+bool performOTAIfAvailable() {  
+  if(client.isConnected()){
+    client.disconnect();
+    Serial.println("WS disconnected");
+  }
   return ::performOTAIfAvailable(FIRMWARE_DEVICE, FIRMWARE_VERSION, GITHUB_REPO, &isUpToDate);
 }
 
