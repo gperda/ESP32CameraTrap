@@ -87,12 +87,14 @@ jobs:
       - name: Build master_camera
         run: |
           cd master_camera
+          pio run -t clean
           pio run
           cp .pio/build/freenove_esp32_s3_wroom/firmware.bin ../master_camera.bin
 
       - name: Build slave_camera
         run: |
           cd slave_camera
+          pio run -t clean
           pio run
           cp .pio/build/freenove_esp32_s3_wroom/firmware.bin ../slave_camera.bin
 
