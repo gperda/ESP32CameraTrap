@@ -101,7 +101,7 @@ bool performOTAIfAvailable(const char* firmwareDevice,
   binClient.setInsecure();
   httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   httpUpdate.rebootOnUpdate(false);
-
+  Serial.printf("Looking for %s\n", binUrl);
   t_httpUpdate_return result = httpUpdate.update(binClient, binUrl);
   switch (result) {
     case HTTP_UPDATE_OK:
