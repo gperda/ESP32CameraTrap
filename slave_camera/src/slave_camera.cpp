@@ -26,14 +26,14 @@
 #include <ota_update.h>
 
 // =================== CONFIGURATION ===================
-#define CAMERA_ID "cam2"   // ← This is the only difference from cam1
-#define MAX_FRAME_SIZE 1048576
-#define FIRMWARE_VERSION  "v2.1.2"
+#define CAMERA_ID         "cam2"   // ← This is the only difference from cam1
+#define MAX_FRAME_SIZE    1048576
+#define FIRMWARE_VERSION  "v2.2.2"
 #define FIRMWARE_DEVICE   "slave_camera"
 #define GITHUB_REPO       "gperda/ESP32CameraTrap"
-#define TRIGGER_WAKEUP_PIN GPIO_NUM_21
+#define WAKEUP_PIN        GPIO_NUM_21
 
-#define MAX_WS_WAIT_TIME_MS 4000
+#define MAX_WS_WAIT_TIME_MS   4000
 #define MAX_WIFI_WAIT_TIME_MS 6000
 
 #ifndef CF_ACCESS_CLIENT_ID
@@ -119,9 +119,6 @@ volatile uint64_t captureTimestamp = 0;
 RTC_DATA_ATTR bool otaPendingRTC = false;
 volatile bool shouldOTA = false;
 volatile bool isUpToDate = false;
-// uint64_t* timestampsToSend = nullptr;
-// volatile uint64_t framesCount = 0;
-
 
 extern const char ca_cert_start[] asm("_binary_ca_cert_start");
 
@@ -439,7 +436,7 @@ void goToSleep() {
   WiFi.mode(WIFI_OFF);
   ws2812SetColor(1);
 
-  esp_sleep_enable_ext0_wakeup(TRIGGER_WAKEUP_PIN, 1);
+  esp_sleep_enable_ext0_wakeup(WAKEUP_PIN, 1);
   esp_deep_sleep_start();
 }
 
