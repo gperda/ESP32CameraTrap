@@ -277,6 +277,15 @@ wss.on('connection', (ws, req) => {
         return;
       }
 
+
+      // Auxiliary relay registration
+      if (text === 'tof_relay') {
+        ws.clientType = 'tof_relay';
+        ws.cameraId = null;
+        console.log(`  Auxiliary relay registered from ${ip}`);
+        return;
+      }
+
       // Browser registration
       if (text === 'browser') {
         ws.clientType = 'browser';
@@ -301,6 +310,14 @@ wss.on('connection', (ws, req) => {
       if (text === 'start_auto')      { startCapture();   return; }
       if (text === 'stop_auto')       { stopCapture();    return; }
       if (text === 'request_ota')     { masterOTAPending = true; slaveOTAPending = true; broadcastStatus(); return; }
+
+      if (ws.clientType === 'tof_relay') {
+        for (const b of browserClients) {
+          if (b.readyState === WebSocket.OPEN) b.send(text);
+        }
+        return;
+      }
+
       return;
     }
 

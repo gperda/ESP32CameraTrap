@@ -1916,8 +1916,8 @@ function drawDepth(distances, statuses, alert) {
   for (let row = 0; row < ZONES; row++) {
     for (let col = 0; col < ZONES; col++) {
       const idx   = row * ZONES + col;
-      const valid = statuses[idx] === 5;
-      const [r, g, b] = valid ? depthToColor(distances[idx]) : [20, 28, 42];
+      const valid =(statuses[idx] === 5 || statuses[idx] === 9);
+      const [r, g, b] = /*valid ? */depthToColor(distances[idx]); // : [20, 28, 42];
 
       const ox = col * CELL, oy = row * CELL;
       for (let dy = 0; dy < CELL; dy++) {
@@ -1929,6 +1929,26 @@ function drawDepth(distances, statuses, alert) {
     }
   }
   depthCtx.putImageData(imgData, 0, 0);
+
+  // Overlay status code for each zone
+  depthCtx.font = '600 12px "Share Tech Mono", ui-monospace, monospace';
+  depthCtx.textAlign = 'center';
+  depthCtx.textBaseline = 'middle';
+  for (let row = 0; row < ZONES; row++) {
+    for (let col = 0; col < ZONES; col++) {
+      const idx = row * ZONES + col;
+      const x = col * CELL + CELL * 0.5;
+      const y = row * CELL + CELL * 0.5;
+      const label = String(distances[idx] ?? '-');// + " " + String(distances[idx] ?? '-');
+
+      depthCtx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+      depthCtx.lineWidth = 3;
+      depthCtx.strokeText(label, x, y);
+
+      depthCtx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+      depthCtx.fillText(label, x, y);
+    }
+  }
 
   // Subtle grid
   depthCtx.strokeStyle = 'rgba(255,255,255,0.07)';
@@ -2046,7 +2066,7 @@ depthCanvas.addEventListener('mousemove', (e) => {
   tofTooltip.style.display = 'block';
   tofTooltip.style.left    = (e.clientX + 14) + 'px';
   tofTooltip.style.top     = (e.clientY + 14) + 'px';
-  tofTooltip.textContent   = s === 5 ? `[${row},${col}]  ${d} mm` : `[${row},${col}]  invalid (status ${s})`;
+  tofTooltip.textContent   = /*s === 5 ? */`[${row},${col}]  ${d} mm`; //: `[${row},${col}]  invalid (status ${s})`;
 });
 depthCanvas.addEventListener('mouseleave', () => { tofTooltip.style.display = 'none'; });
 

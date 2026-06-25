@@ -80,7 +80,7 @@ function connectWS() {
 
   wsRelay.on('open', () => {
     console.log('[WS]  Connected to camera server');
-    wsRelay.send('tof_relay');   // register; server sees unknown type → relays text
+    wsRelay.send('tof_relay');
     wsReady = true;
     while (queue.length) wsRelay.send(queue.shift());
   });
