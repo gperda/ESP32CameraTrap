@@ -84,7 +84,7 @@ const unsigned long RECONNECT_MS = 5000;
 static uint8_t* g_sendBuf = nullptr;
 
 int frameCount =0;
-uint8_t masterMAC[] = {0xD0, 0xCF, 0x13, 0x26, 0xE0, 0x6C};
+uint8_t masterMAC[] = {0xD0, 0xCF, 0x13, 0x26, 0xFB, 0x54};
 
 typedef struct struct_message {
   uint64_t timestamp;
@@ -148,7 +148,7 @@ int initCamera(void) {
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 16000000;
-  config.frame_size = FRAMESIZE_5MP;
+  config.frame_size = FRAMESIZE_FHD;
   config.pixel_format = PIXFORMAT_JPEG; // for streaming
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
   config.fb_location = CAMERA_FB_IN_PSRAM;

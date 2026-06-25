@@ -44,7 +44,7 @@
 #define THRESHOLD_DISTANCE_MM_HIGH 3000
 #define THRESHOLD_DETECTION_MIN_NUMBER_OF_ZONES 6
 #define THRESHOLD_MOTION_MAX_ZONES 4
-#define THRESHOLD_MOTION_MAX_TOTAL 50 * 16
+#define THRESHOLD_MOTION_MAX_TOTAL 20 * 16
 
 #define MAX_WIFI_WAIT_TIME_MS     6000
 #define MAX_WS_WAIT_TIME_MS       4000
@@ -105,7 +105,7 @@ Adafruit_VL53L5CX tofSensor;
 VL53L5CX_ResultsData tofData;
 
 // =================== ESP-NOW COMMUNICATION ================
-uint8_t slaveMAC[] = {0xD0, 0xCF, 0x13, 0x26, 0xFB, 0x54};
+uint8_t slaveMAC[] = {0xD0, 0xCF, 0x13, 0x26, 0xE0, 0x6C};
 
 typedef struct Header {
   char     camera_id[8];   // fixed width
@@ -192,8 +192,9 @@ int initCamera(void) {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn     = PWDN_GPIO_NUM;
   config.pin_reset    = RESET_GPIO_NUM;
-  config.xclk_freq_hz   = 8000000;
-  config.frame_size     = FRAMESIZE_5MP;
+  // config.xclk_freq_hz   = 8000000;
+  config.xclk_freq_hz   = 16000000;
+  config.frame_size     = FRAMESIZE_FHD;
   config.pixel_format   = PIXFORMAT_JPEG;
   config.grab_mode      = CAMERA_GRAB_WHEN_EMPTY;
   config.fb_location    = CAMERA_FB_IN_PSRAM;

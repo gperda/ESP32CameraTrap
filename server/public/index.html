@@ -258,6 +258,148 @@
     }
     .btn-undistort:hover:not(:disabled) { background: #0d2740; }
     .btn-undistort:disabled { opacity: 0.35; cursor: not-allowed; color: var(--muted); }
+    .btn-detect {
+      margin-left: 4px;
+      padding: 3px 9px;
+      font-size: 0.75rem;
+      border-radius: 6px;
+      background: #133d25;
+      color: #7dffb0;
+      border: 1px solid #1f7d4f;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background .15s, opacity .15s;
+    }
+    .btn-detect:hover:not(:disabled) { background: #0d2d1b; }
+    .btn-detect:disabled { opacity: 0.35; cursor: not-allowed; color: var(--muted); }
+
+    /* ── Measure tool ── */
+    .depth-header-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .btn-measure {
+      padding: 5px 14px;
+      font-size: 0.82rem;
+      border-radius: 6px;
+      background: #1a3354;
+      color: #7ecfff;
+      border: 1px solid #2a5090;
+      cursor: pointer;
+      font-weight: 600;
+      transition: background .15s, color .15s, box-shadow .15s;
+    }
+    .btn-measure:hover { background: #1e3f6a; }
+    .btn-measure.active {
+      background: #003a6a;
+      color: var(--tof-accent);
+      box-shadow: 0 0 8px rgba(0,229,255,.35);
+      border-color: var(--tof-accent);
+    }
+
+    /* Wrapper that lets the canvas overlay the image exactly */
+    .depth-img-wrapper {
+      position: relative;
+      display: inline-block;
+      line-height: 0;
+      max-width: 100%;
+    }
+
+    /* Measure overlay canvas — sized and positioned explicitly by JS */
+    #measureCanvas {
+      position: absolute;
+      top: 0; left: 0;           /* overridden by syncCanvasSize() */
+      border-radius: 6px;
+      display: none;
+    }
+    #measureCanvas.active {
+      display: block;
+      cursor: none;   /* we draw our own crosshair */
+    }
+
+    /* Hint bar shown below the image while measuring */
+    .measure-hint {
+      width: 100%;
+      max-width: 860px;
+      background: rgba(0,40,80,.55);
+      border: 1px solid #1a4a7a;
+      border-radius: 6px;
+      padding: 7px 14px;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: #9dd4f0;
+      text-align: center;
+    }
+
+    /* Measurements info panel (below the depth-panel-body) */
+    .measure-panel {
+      border-top: 1px solid var(--border);
+    }
+    .measure-panel-header {
+      background: var(--border);
+      padding: 8px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--tof-accent);
+      letter-spacing: 0.5px;
+    }
+    .btn-measure-clear {
+      padding: 3px 10px;
+      font-size: 0.75rem;
+      border-radius: 5px;
+      background: rgba(255,61,87,.15);
+      color: var(--tof-alert);
+      border: 1px solid rgba(255,61,87,.35);
+      cursor: pointer;
+    }
+    .btn-measure-clear:hover { background: rgba(255,61,87,.3); }
+
+    .measure-table-wrap {
+      overflow-x: auto;
+      padding: 10px 18px 14px;
+    }
+    .measure-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+    }
+    .measure-table th {
+      text-align: left;
+      padding: 5px 10px;
+      color: var(--tof-dim);
+      font-size: 0.68rem;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
+    }
+    .measure-table td {
+      padding: 6px 10px;
+      border-bottom: 1px solid rgba(15,52,96,.5);
+      color: var(--text);
+      white-space: nowrap;
+    }
+    .measure-table tr:last-child td { border-bottom: none; }
+    .measure-row-pending td { color: var(--muted); font-style: italic; }
+    .measure-row-error td   { color: var(--tof-alert); }
+    .measure-xyz { color: var(--tof-accent); font-weight: 600; }
+    .measure-computing { color: var(--muted); font-style: italic; }
+    .measure-error { color: var(--tof-alert); }
+    .btn-remove-row {
+      padding: 2px 8px;
+      font-size: 0.72rem;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: color .15s, border-color .15s;
+    }
+    .btn-remove-row:hover { color: var(--tof-alert); border-color: var(--tof-alert); }
 
     /* ── Stereo depth panel ── */
     .depth-panel {
@@ -616,11 +758,43 @@
 <div class="depth-panel" id="depthPanel">
   <div class="depth-panel-header">
     <h2 id="depthPanelTitle">⊡ Stereo Depth Map</h2>
-    <a id="depthDownloadLink" download="depthmap.png">⬇ Save Result</a>
+    <div class="depth-header-right">
+      <button class="btn-measure" id="btnMeasure" style="display:none">⊕ Measure</button>
+      <a id="depthDownloadLink" download="depthmap.png">⬇ Save Result</a>
+    </div>
   </div>
   <div class="depth-panel-body">
     <div class="depth-status" id="depthStatus"></div>
-    <img id="depthResultImg" alt="Stereo depth map" />
+    <div class="depth-img-wrapper" id="depthImgWrapper">
+      <img id="depthResultImg" alt="Stereo depth map" />
+      <canvas id="measureCanvas"></canvas>
+    </div>
+    <div class="measure-hint" id="measureHint" style="display:none">
+      <span id="measureHintText"></span>
+    </div>
+  </div>
+  <!-- Measurements panel (revealed once first measurement exists) -->
+  <div class="measure-panel" id="measurePanel" style="display:none">
+    <div class="measure-panel-header">
+      <span>⊕ Measurements &nbsp;<span id="measureCount" style="color:var(--muted);font-weight:400"></span></span>
+      <button class="btn-measure-clear" id="btnMeasureClear">✕ Clear All</button>
+    </div>
+    <div class="measure-table-wrap">
+      <table class="measure-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Cam1 px (x, y)</th>
+            <th>Cam2 px (x, y)</th>
+            <th>X mm</th>
+            <th>Y mm</th>
+            <th>Z mm</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="measureTableBody"></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -942,15 +1116,23 @@ function addOrUpdatePair(tsStr, camId, jpeg, frameNum, sizeKB) {
     rowEl.appendChild(badge1El);
     rowEl.appendChild(badge2El);
     rowEl.appendChild(dlBtn);
+    const detectBtn = document.createElement('button');
+    detectBtn.className   = 'btn-detect';
+    detectBtn.title       = 'Run MegaDetector on cam1';
+    detectBtn.textContent = '⊙ Detect';
+    detectBtn.disabled    = true;
+    detectBtn.addEventListener('click', e => { e.stopPropagation(); requestDetection(tsStr); });
+
     rowEl.appendChild(comboBtn);
     rowEl.appendChild(depthBtn);
     rowEl.appendChild(undistortBtn);
+    rowEl.appendChild(detectBtn);
     rowEl.addEventListener('click', () => showPair(tsStr));
 
     const $pairList = document.getElementById('pairList');
     $pairList.insertBefore(rowEl, $pairList.firstChild);
 
-    pairMap.set(tsStr, { cam1: null, cam2: null, rowEl, badge1El, badge2El, comboBtn, depthBtn, undistortBtn });
+    pairMap.set(tsStr, { cam1: null, cam2: null, rowEl, badge1El, badge2El, comboBtn, depthBtn, undistortBtn, detectBtn });
   }
 
   const entry   = pairMap.get(tsStr);
@@ -960,11 +1142,12 @@ function addOrUpdatePair(tsStr, camId, jpeg, frameNum, sizeKB) {
   badgeEl.textContent = `Cam ${camId === 'cam1' ? '1' : '2'}: ${sizeKB}`;
   badgeEl.classList.remove('missing');
 
-  // Enable depth button once both images have arrived
+  // Enable buttons once both images have arrived
   if (entry.cam1 && entry.cam2) {
     if (entry.comboBtn) entry.comboBtn.disabled = false;
     if (entry.depthBtn) entry.depthBtn.disabled = false;
     if (entry.undistortBtn) entry.undistortBtn.disabled = false;
+    if (entry.detectBtn) entry.detectBtn.disabled = false;
   }
 }
 
@@ -1173,6 +1356,9 @@ async function requestStereoView(tsStr, viewMode) {
     if (depthBlobUrl) URL.revokeObjectURL(depthBlobUrl);
     depthBlobUrl = URL.createObjectURL(blob);
 
+    resultImg.onload = () => {
+      if (measureState.active) { syncCanvasSize(); drawMeasureOverlay(); }
+    };
     resultImg.src = depthBlobUrl;
     resultImg.classList.add('show');
 
@@ -1192,6 +1378,26 @@ async function requestStereoView(tsStr, viewMode) {
     }
     dlLink.classList.add('show');
 
+    // ── Show / hide the Measure tool (undistort view only) ────────────────
+    const $btnMeasure = document.getElementById('btnMeasure');
+    if ($btnMeasure) {
+      if (mode === 'undistort') {
+        $btnMeasure.style.display = 'inline-block';
+        // Reset in-progress clicks for the new image; keep completed rows
+        measureState.pendingCam1 = null;
+        measureState.pendingCam2 = null;
+        measureState.currentTs   = tsStr;
+        if (measureState.active) {
+          updateMeasureHint();
+          drawMeasureOverlay();
+        }
+      } else {
+        $btnMeasure.style.display = 'none';
+        // Turn off measure mode when leaving undistort view
+        if (measureState.active) deactivateMeasureMode();
+      }
+    }
+
     statusEl.textContent = mode === 'undistort'
       ? `Undistorted pair ready · pair ${tsStr}`
       : `Depth map ready · pair ${tsStr}`;
@@ -1209,6 +1415,457 @@ async function requestStereoView(tsStr, viewMode) {
       entry.undistortBtn.textContent = '◫ Undistort';
     }
   }
+}
+
+async function requestDetection(tsStr) {
+  const entry = pairMap.get(tsStr);
+  if (!entry || !entry.cam1) return;
+
+  const panel     = document.getElementById('depthPanel');
+  const titleEl   = document.getElementById('depthPanelTitle');
+  const statusEl  = document.getElementById('depthStatus');
+  const resultImg = document.getElementById('depthResultImg');
+  const dlLink    = document.getElementById('depthDownloadLink');
+
+  if (entry.detectBtn) {
+    entry.detectBtn.disabled = true;
+    entry.detectBtn.textContent = 'Scanning…';
+  }
+  panel.classList.add('visible');
+  titleEl.textContent = '⊙ MegaDetector Result';
+  statusEl.textContent = 'Running MegaDetector on cam1…';
+  statusEl.className   = 'depth-status';
+  resultImg.classList.remove('show');
+  dlLink.classList.remove('show');
+  dlLink.onclick = null;
+
+  const $btnMeasure = document.getElementById('btnMeasure');
+  if ($btnMeasure) $btnMeasure.style.display = 'none';
+
+  const fd = new FormData();
+  fd.append('cam1', entry.cam1.blob, 'cam1.jpg');
+
+  try {
+    const res = await fetch('/api/detect', { method: 'POST', body: fd });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+
+    const blob = await res.blob();
+    if (depthBlobUrl) URL.revokeObjectURL(depthBlobUrl);
+    depthBlobUrl = URL.createObjectURL(blob);
+
+    resultImg.src = depthBlobUrl;
+    resultImg.classList.add('show');
+
+    dlLink.onclick = null;
+    dlLink.href = depthBlobUrl;
+    dlLink.download = `detection_${tsStr}.png`;
+    dlLink.textContent = '⬇ Save Detection';
+    dlLink.classList.add('show');
+
+    statusEl.textContent = `Detection complete · pair ${tsStr}`;
+
+  } catch (e) {
+    statusEl.textContent = 'Error: ' + e.message;
+    statusEl.className   = 'depth-status error';
+  } finally {
+    if (entry.detectBtn) {
+      entry.detectBtn.disabled = false;
+      entry.detectBtn.textContent = '⊙ Detect';
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// STEREO MEASURE TOOL
+// ─────────────────────────────────────────────────────────────
+
+/* ── State ─────────────────────────────────────────────────── */
+const measureState = {
+  active:      false,   // is the tool enabled?
+  currentTs:   null,    // tsStr of the currently displayed undistort pair
+  pendingCam1: null,    // {x, y} in natural-image px, or null
+  pendingCam2: null,    // {x, y} in natural-image px, or null
+  mousePos:    null,    // {cx, cy} in canvas backing-store pixels
+  measurements: [],     // completed rows [{id, cam1, cam2, xyz?, error?, pending}]
+  nextId:      1,
+};
+
+/* ── Element refs ── */
+const $measureCanvas    = document.getElementById('measureCanvas');
+const $measureHint      = document.getElementById('measureHint');
+const $measureHintText  = document.getElementById('measureHintText');
+const $measurePanel     = document.getElementById('measurePanel');
+const $measureTableBody = document.getElementById('measureTableBody');
+const $measureCount     = document.getElementById('measureCount');
+const $btnMeasureRef    = document.getElementById('btnMeasure');
+const $btnMeasureClear  = document.getElementById('btnMeasureClear');
+
+/* ── Toggle / deactivate ────────────────────────────────────── */
+function toggleMeasureMode() {
+  if (measureState.active) {
+    deactivateMeasureMode();
+  } else {
+    activateMeasureMode();
+  }
+}
+
+function activateMeasureMode() {
+  measureState.active      = true;
+  measureState.pendingCam1 = null;
+  measureState.pendingCam2 = null;
+  $btnMeasureRef.classList.add('active');
+  $btnMeasureRef.textContent = '⊕ Measuring…';
+  $measureCanvas.classList.add('active');
+  $measureHint.style.display = 'block';
+  syncCanvasSize();
+  updateMeasureHint();
+  drawMeasureOverlay();
+}
+
+function deactivateMeasureMode() {
+  measureState.active      = false;
+  measureState.pendingCam1 = null;
+  measureState.pendingCam2 = null;
+  measureState.mousePos    = null;
+  $btnMeasureRef.classList.remove('active');
+  $btnMeasureRef.textContent = '⊕ Measure';
+  $measureCanvas.classList.remove('active');
+  $measureHint.style.display = 'none';
+  const ctx = $measureCanvas.getContext('2d');
+  ctx.clearRect(0, 0, $measureCanvas.width, $measureCanvas.height);
+}
+
+/* ── Attach measure button click ── */
+if ($btnMeasureRef) $btnMeasureRef.addEventListener('click', toggleMeasureMode);
+if ($btnMeasureClear) $btnMeasureClear.addEventListener('click', clearMeasurements);
+
+/* ── Canvas sizing — explicitly overlays the image element ─── */
+function syncCanvasSize() {
+  const img = document.getElementById('depthResultImg');
+  if (!img.classList.contains('show') || !img.offsetWidth) return;
+
+  const imgRect  = img.getBoundingClientRect();
+  const wrapRect = $measureCanvas.parentElement.getBoundingClientRect();
+  const dpr      = window.devicePixelRatio || 1;
+
+  const cssLeft   = imgRect.left - wrapRect.left;
+  const cssTop    = imgRect.top  - wrapRect.top;
+  const cssWidth  = imgRect.width;
+  const cssHeight = imgRect.height;
+
+  $measureCanvas.style.left   = cssLeft   + 'px';
+  $measureCanvas.style.top    = cssTop    + 'px';
+  $measureCanvas.style.width  = cssWidth  + 'px';
+  $measureCanvas.style.height = cssHeight + 'px';
+
+  const bsW = Math.round(cssWidth  * dpr);
+  const bsH = Math.round(cssHeight * dpr);
+  if ($measureCanvas.width !== bsW || $measureCanvas.height !== bsH) {
+    $measureCanvas.width  = bsW;
+    $measureCanvas.height = bsH;
+  }
+}
+
+// Re-sync canvas whenever the image or viewport resizes
+if (typeof ResizeObserver !== 'undefined') {
+  new ResizeObserver(() => {
+    if (measureState.active) { syncCanvasSize(); drawMeasureOverlay(); }
+  }).observe(document.getElementById('depthImgWrapper'));
+}
+
+/* ── Canvas events ──────────────────────────────────────────── */
+$measureCanvas.addEventListener('mousemove', (e) => {
+  if (!measureState.active) return;
+  const r   = $measureCanvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  measureState.mousePos = {
+    cx: (e.clientX - r.left) * dpr,
+    cy: (e.clientY - r.top)  * dpr,
+  };
+  syncCanvasSize();
+  drawMeasureOverlay();
+});
+
+$measureCanvas.addEventListener('mouseleave', () => {
+  measureState.mousePos = null;
+  if (measureState.active) drawMeasureOverlay();
+});
+
+$measureCanvas.addEventListener('click', (e) => {
+  if (!measureState.active) return;
+
+  const img = document.getElementById('depthResultImg');
+  if (!img.classList.contains('show') || !img.naturalWidth) return;
+
+  const r       = $measureCanvas.getBoundingClientRect();
+  const scaleX  = img.naturalWidth  / r.width;
+  const scaleY  = img.naturalHeight / r.height;
+  const nx      = (e.clientX - r.left) * scaleX;
+  const ny      = (e.clientY - r.top)  * scaleY;
+
+  const halfNW = img.naturalWidth / 2;
+
+  // After depthmap.py inversion: left half = cam2, right half = cam1
+  if (nx < halfNW) {
+    measureState.pendingCam2 = { x: nx, y: ny };
+  } else {
+    measureState.pendingCam1 = { x: nx - halfNW, y: ny };
+  }
+
+  updateMeasureHint();
+  drawMeasureOverlay();
+
+  // Auto-triangulate once both points are ready
+  if (measureState.pendingCam1 && measureState.pendingCam2) {
+    performTriangulation();
+  }
+});
+
+/* ── Drawing ────────────────────────────────────────────────── */
+function drawMeasureOverlay() {
+  const ctx = $measureCanvas.getContext('2d');
+  const W   = $measureCanvas.width;
+  const H   = $measureCanvas.height;
+  const dpr = window.devicePixelRatio || 1;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const img = document.getElementById('depthResultImg');
+  if (!measureState.active || !img.classList.contains('show')) return;
+
+  const halfW = W / 2;
+
+  // ── Divider line between cam1 / cam2 halves ──
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  ctx.lineWidth   = 1;
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath(); ctx.moveTo(halfW, 0); ctx.lineTo(halfW, H); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  // ── Half labels (bottom, after depthmap inversion: left=cam2, right=cam1) ──
+  ctx.font      = `${Math.round(11 * dpr)}px 'Share Tech Mono', monospace`;
+  ctx.fillStyle = 'rgba(255,152,0,0.70)';
+  ctx.fillText('CAM2', 6 * dpr, H - 7 * dpr);
+  ctx.fillStyle = 'rgba(0,229,255,0.70)';
+  ctx.fillText('CAM1', halfW + 6 * dpr, H - 7 * dpr);
+
+  // ── Helpers for coordinate mapping ──
+  const toCanvasX = (naturalX) => (naturalX / img.naturalWidth)  * W;
+  const toCanvasY = (naturalY) => (naturalY / img.naturalHeight) * H;
+
+  // ── Completed measurement markers ──
+  // After inversion: cam2 is on the left half, cam1 is on the right half
+  for (const m of measureState.measurements) {
+    if (!m.cam1 || !m.cam2) continue;
+    const c2cx = toCanvasX(m.cam2.x);
+    const c2cy = toCanvasY(m.cam2.y);
+    const c1cx = toCanvasX(m.cam1.x + img.naturalWidth / 2);
+    const c1cy = toCanvasY(m.cam1.y);
+    drawPointMarker(ctx, c2cx, c2cy, 'rgba(255,152,0,0.50)', String(m.id), dpr);
+    drawPointMarker(ctx, c1cx, c1cy, 'rgba(0,229,255,0.50)',  String(m.id), dpr);
+  }
+
+  // ── Pending point markers ──
+  if (measureState.pendingCam2) {
+    const cx = toCanvasX(measureState.pendingCam2.x);
+    const cy = toCanvasY(measureState.pendingCam2.y);
+    drawPointMarker(ctx, cx, cy, '#ff9800', '?', dpr);
+  }
+  if (measureState.pendingCam1) {
+    const cx = toCanvasX(measureState.pendingCam1.x + img.naturalWidth / 2);
+    const cy = toCanvasY(measureState.pendingCam1.y);
+    drawPointMarker(ctx, cx, cy, '#00e5ff', '?', dpr);
+  }
+
+  // ── Custom crosshair cursor ──
+  if (measureState.mousePos) {
+    const { cx, cy } = measureState.mousePos;
+    // After inversion: left=cam2 (orange), right=cam1 (cyan)
+    const isRight = cx > halfW;
+    const color   = isRight ? '#00e5ff' : '#ff9800';
+    const SQ      = 10 * dpr;   // half-side of the square
+
+    ctx.save();
+    ctx.globalAlpha = 0.88;
+
+    // Full-span dashed cross lines
+    ctx.strokeStyle = color;
+    ctx.lineWidth   = 1 * dpr;
+    ctx.setLineDash([4 * dpr, 4 * dpr]);
+    ctx.beginPath(); ctx.moveTo(0, cy);  ctx.lineTo(W, cy);  ctx.stroke(); // horizontal
+    ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, H);   ctx.stroke(); // vertical
+    ctx.setLineDash([]);
+
+    // Square outline at the cursor centre
+    ctx.strokeStyle = color;
+    ctx.lineWidth   = 1.5 * dpr;
+    ctx.strokeRect(cx - SQ, cy - SQ, SQ * 2, SQ * 2);
+
+    // Small dot at exact centre
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 2 * dpr, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
+function drawPointMarker(ctx, cx, cy, color, label, dpr) {
+  const s = 6 * dpr;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle   = color;
+  ctx.lineWidth   = 1.5 * dpr;
+
+  // Cross arms
+  ctx.beginPath();
+  ctx.moveTo(cx - s, cy); ctx.lineTo(cx + s, cy);
+  ctx.moveTo(cx, cy - s); ctx.lineTo(cx, cy + s);
+  ctx.stroke();
+
+  // Circle
+  ctx.beginPath();
+  ctx.arc(cx, cy, 4 * dpr, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Label
+  if (label) {
+    ctx.font      = `${Math.round(9 * dpr)}px 'Share Tech Mono', monospace`;
+    ctx.fillText(label, cx + 6 * dpr, cy - 5 * dpr);
+  }
+
+  ctx.restore();
+}
+
+/* ── Hint bar ───────────────────────────────────────────────── */
+function updateMeasureHint() {
+  const has1 = !!measureState.pendingCam1;
+  const has2 = !!measureState.pendingCam2;
+
+  // After inversion: left=cam2, right=cam1
+  if (!has1 && !has2) {
+    $measureHintText.innerHTML =
+      'Click in either half — <strong style="color:#ff9800">left = cam2</strong>, ' +
+      '<strong style="color:#00e5ff">right = cam1</strong>';
+  } else if (has1 && !has2) {
+    $measureHintText.innerHTML =
+      '<strong style="color:#00e5ff">Cam1 ✓</strong> — now click the ' +
+      '<strong style="color:#ff9800">left half (cam2)</strong> to triangulate';
+  } else if (!has1 && has2) {
+    $measureHintText.innerHTML =
+      '<strong style="color:#ff9800">Cam2 ✓</strong> — now click the ' +
+      '<strong style="color:#00e5ff">right half (cam1)</strong> to triangulate';
+  } else {
+    $measureHintText.textContent = 'Triangulating…';
+  }
+}
+
+/* ── Triangulation call ─────────────────────────────────────── */
+async function performTriangulation() {
+  const c1 = measureState.pendingCam1;
+  const c2 = measureState.pendingCam2;
+  if (!c1 || !c2) return;
+
+  // Snapshot and clear pending immediately
+  const snap1 = { ...c1 };
+  const snap2 = { ...c2 };
+  measureState.pendingCam1 = null;
+  measureState.pendingCam2 = null;
+  updateMeasureHint();
+  drawMeasureOverlay();
+
+  const rowId = measureState.nextId++;
+  const row   = { id: rowId, cam1: snap1, cam2: snap2, pending: true };
+  measureState.measurements.push(row);
+  renderMeasurements();
+  $measurePanel.style.display = 'block';
+
+  try {
+    const res  = await fetch('/api/triangulate', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ point_cam1: snap1, point_cam2: snap2 }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      row.error = data.error || `HTTP ${res.status}`;
+    } else {
+      row.xyz = data.xyz_mm;
+    }
+  } catch (e) {
+    row.error = e.message;
+  }
+
+  row.pending = false;
+  renderMeasurements();
+  drawMeasureOverlay();
+}
+
+/* ── Measurement table ──────────────────────────────────────── */
+function renderMeasurements() {
+  $measureTableBody.innerHTML = '';
+
+  for (const m of measureState.measurements) {
+    const tr = document.createElement('tr');
+    if (m.pending) tr.classList.add('measure-row-pending');
+    if (m.error)   tr.classList.add('measure-row-error');
+
+    const fmt  = n  => typeof n === 'number' ? n.toFixed(1) : '—';
+    const fmtP = xy => `(${fmt(xy.x)}, ${fmt(xy.y)})`;
+
+    let xyzCells;
+    if (m.pending) {
+      xyzCells = `<td colspan="3" class="measure-computing">Computing…</td>`;
+    } else if (m.error) {
+      xyzCells = `<td colspan="3" class="measure-error" title="${m.error}">Error — ${m.error.slice(0, 60)}</td>`;
+    } else {
+      xyzCells =
+        `<td class="measure-xyz">${fmt(m.xyz.X)}</td>` +
+        `<td class="measure-xyz">${fmt(m.xyz.Y)}</td>` +
+        `<td class="measure-xyz">${fmt(m.xyz.Z)}</td>`;
+    }
+
+    tr.innerHTML =
+      `<td>${m.id}</td>` +
+      `<td>${fmtP(m.cam1)}</td>` +
+      `<td>${fmtP(m.cam2)}</td>` +
+      xyzCells +
+      `<td><button class="btn-remove-row" data-id="${m.id}">✕</button></td>`;
+
+    $measureTableBody.appendChild(tr);
+  }
+
+  $measureCount.textContent = measureState.measurements.length
+    ? `(${measureState.measurements.length})`
+    : '';
+}
+
+$measureTableBody.addEventListener('click', (e) => {
+  const btn = e.target.closest('.btn-remove-row');
+  if (!btn) return;
+  removeMeasurement(Number(btn.dataset.id));
+});
+
+function removeMeasurement(id) {
+  const idx = measureState.measurements.findIndex(m => m.id === id);
+  if (idx !== -1) measureState.measurements.splice(idx, 1);
+  renderMeasurements();
+  drawMeasureOverlay();
+  if (measureState.measurements.length === 0) $measurePanel.style.display = 'none';
+}
+
+function clearMeasurements() {
+  measureState.measurements = [];
+  renderMeasurements();
+  drawMeasureOverlay();
+  $measurePanel.style.display = 'none';
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -48,7 +48,7 @@ SPECKLE_WINDOW_SIZE  = 0
 SPECKLE_RANGE        = 10
 
 # Maximum long-edge size to process (resize if larger, for speed)
-MAX_PROCESS_DIM = 800
+MAX_PROCESS_DIM = 2560
 
 
 def fail(msg: str) -> None:
@@ -144,8 +144,9 @@ def make_undistort_preview(left_bgr, right_bgr):
 
     split_x = left_bgr.shape[1]
     cv2.line(out, (split_x, 0), (split_x, h - 1), (255, 255, 255), 1)
-    cv2.putText(out, "cam1 undistorted", (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1, cv2.LINE_AA)
-    cv2.putText(out, "cam2 undistorted", (split_x + 8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1, cv2.LINE_AA)
+    # Labels at the bottom; left side is now cam2, right side is cam1
+    # cv2.putText(out, "cam2 undistorted", (8, h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1, cv2.LINE_AA)
+    # cv2.putText(out, "cam1 undistorted", (split_x + 8, h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1, cv2.LINE_AA)
     return out
 
 
@@ -196,6 +197,22 @@ def main():
             K1, D1, K2, D2, image_size, R, T,
             flags=cv2.CALIB_ZERO_DISPARITY, alpha=0,
         )
+
+        # Persist rectification matrices to calibration.json so triangulation.py
+        # can load them directly without recomputing stereoRectify.
+        try:
+            with open(calib_path) as _f:
+                _calib_data = json.load(_f)
+            _calib_data["R1"] = R1.tolist()
+            _calib_data["R2"] = R2.tolist()
+            _calib_data["P1"] = P1_.tolist()
+            _calib_data["P2"] = P2_.tolist()
+            _calib_data["image_size"] = list(image_size)
+            with open(calib_path, "w") as _f:
+                json.dump(_calib_data, _f, indent=2)
+        except Exception:
+            pass  # Non-fatal: rectification proceeds even if write fails
+
         map1x, map1y = cv2.initUndistortRectifyMap(K1, D1, R1, P1_, image_size, cv2.CV_32FC1)
         map2x, map2y = cv2.initUndistortRectifyMap(K2, D2, R2, P2_, image_size, cv2.CV_32FC1)
 
@@ -223,7 +240,8 @@ def main():
         # Keep the preview in color so image quality / alignment are easy to inspect.
         preview_left = left_rect if calibrated else left_bgr
         preview_right = right_rect if calibrated else right_bgr
-        out_img = make_undistort_preview(preview_left, preview_right)
+        # Swap order: cam2 on left, cam1 on right (matches JS side-mapping)
+        out_img = make_undistort_preview(preview_right, preview_left)
         mode_label = "undistort"
     elif mode == "undistort_cam1":
         out_img = left_rect if calibrated else left_bgr

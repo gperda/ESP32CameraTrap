@@ -30,8 +30,10 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // ─── Stereo depth map endpoint ────────────────────────────────────────────────
 const upload     = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
-const DEPTHMAP_PY = path.join(__dirname, 'depthmap.py');
-const CALIB_JSON  = path.join(__dirname, 'calibration.json');
+const DEPTHMAP_PY      = path.join(__dirname, 'depthmap.py');
+const TRIANGULATION_PY = path.join(__dirname, 'triangulation.py');
+const DETECTION_PY     = path.join(__dirname, 'detection.py');
+const CALIB_JSON       = path.join(__dirname, 'calibration.json');
 
 app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 'cam2', maxCount: 1 }]), (req, res) => {
   const files = req.files;
@@ -95,6 +97,102 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
   if (outputMode === 'undistort_cam1') fileName = 'undistorted_cam1.png';
   if (outputMode === 'undistort_cam2') fileName = 'undistorted_cam2.png';
   res.download(outPng, fileName, (err) => {
+    cleanup();
+    if (err && !res.headersSent) res.status(500).json({ error: 'Download failed' });
+  });
+});
+
+// ─── Stereo triangulation endpoint ────────────────────────────────────────────
+// Accepts two pixel coordinates (already in the rectified undistort-preview
+// frame) and returns the triangulated 3-D point in the cam1 rectified frame.
+app.post('/api/triangulate', express.json({ limit: '4kb' }), (req, res) => {
+  const { point_cam1, point_cam2 } = req.body || {};
+
+  const isFiniteNonNeg = v => typeof v === 'number' && isFinite(v) && v >= 0;
+  if (
+    !point_cam1 || !point_cam2 ||
+    !isFiniteNonNeg(point_cam1.x) || !isFiniteNonNeg(point_cam1.y) ||
+    !isFiniteNonNeg(point_cam2.x) || !isFiniteNonNeg(point_cam2.y)
+  ) {
+    return res.status(400).json({
+      error: 'point_cam1 and point_cam2 must each have finite non-negative x and y numbers',
+    });
+  }
+
+  if (!fs.existsSync(CALIB_JSON)) {
+    return res.status(500).json({ error: 'calibration.json not found on server' });
+  }
+
+  const args = [
+    TRIANGULATION_PY,
+    String(point_cam1.x), String(point_cam1.y),
+    String(point_cam2.x), String(point_cam2.y),
+    CALIB_JSON,
+  ];
+
+  const result = spawnSync('python3', args, { timeout: 15_000, encoding: 'utf8' });
+
+  if (result.error) {
+    return res.status(500).json({ error: 'Failed to spawn python3: ' + result.error.message });
+  }
+
+  let pyOut = {};
+  try { pyOut = JSON.parse((result.stdout || '').trim()); } catch { /* ignore */ }
+
+  if (result.status !== 0 || !pyOut.success) {
+    const errMsg = pyOut.error || result.stderr || 'triangulation.py failed';
+    console.error('[triangulate]', errMsg);
+    return res.status(500).json({ error: errMsg });
+  }
+
+  console.log(`[triangulate] XYZ=${JSON.stringify(pyOut.xyz_mm)}`);
+  res.json(pyOut);
+});
+
+// ─── MegaDetector endpoint ─────────────────────────────────────────────────────
+app.post('/api/detect', upload.fields([{ name: 'cam1', maxCount: 1 }]), (req, res) => {
+  const files = req.files;
+  if (!files || !files.cam1) {
+    return res.status(400).json({ error: 'cam1 file is required' });
+  }
+
+  const id     = crypto.randomUUID();
+  const tmpDir = os.tmpdir();
+  const img1   = path.join(tmpDir, `${id}_cam1.jpg`);
+  const outPng = path.join(tmpDir, `${id}_detect.png`);
+
+  const cleanup = () => {
+    for (const f of [img1, outPng]) {
+      try { fs.unlinkSync(f); } catch { /* already gone */ }
+    }
+  };
+
+  try {
+    fs.writeFileSync(img1, files.cam1[0].buffer);
+  } catch (e) {
+    cleanup();
+    return res.status(500).json({ error: 'Failed to write temp file: ' + e.message });
+  }
+
+  const result = spawnSync('python3', [DETECTION_PY, img1, outPng], { timeout: 120_000, encoding: 'utf8' });
+
+  if (result.error) {
+    cleanup();
+    return res.status(500).json({ error: 'Failed to spawn python3: ' + result.error.message });
+  }
+
+  let pyOut = {};
+  try { pyOut = JSON.parse((result.stdout || '').trim()); } catch { /* ignore */ }
+
+  if (result.status !== 0 || !pyOut.success) {
+    cleanup();
+    const errMsg = pyOut.error || result.stderr || 'detection.py failed';
+    console.error('[detect]', errMsg);
+    return res.status(500).json({ error: errMsg });
+  }
+
+  console.log(`[detect] ${pyOut.detections} detection(s) written to ${outPng}`);
+  res.download(outPng, 'detection.png', (err) => {
     cleanup();
     if (err && !res.headersSent) res.status(500).json({ error: 'Download failed' });
   });
