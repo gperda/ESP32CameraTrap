@@ -5,7 +5,7 @@ Usage:
 
 Arguments:
     img_path    Path to input JPEG image
-    out_path    Path for annotated output PNG
+    out_path    Path for annotated output
 
 Prints a single JSON line to stdout:
     { "success": true,  "detections": N }
@@ -104,13 +104,18 @@ def main():
             if mask_np.ndim > 2:
                 mask_np = np.squeeze(mask_np)
             mask_bool = mask_np > 0
+
+            binary_mask = (mask_bool.astype(np.uint8) * 255)
+            Image.fromarray(binary_mask, mode="L").save(out_path.replace(".png", f"_mask_{i}.png"))
+
             if np.any(mask_bool):
                 color = mask_colors[i % len(mask_colors)].astype(np.float32)
                 image_np[mask_bool] = (1.0 - alpha) * image_np[mask_bool] + alpha * color
 
+            
+
         image = Image.fromarray(image_np.astype(np.uint8), mode="RGB")
         #vis_utils.draw_bounding_boxes_on_image(image, boxes, box_colors, display_strs=confidences)
-
 
     try:
         image.save(out_path)

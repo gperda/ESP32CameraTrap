@@ -173,6 +173,52 @@
       font-weight: 600;
       color: var(--text);
       letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .history-filters {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .history-filters label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.74rem;
+      font-weight: 500;
+      color: #b2c2d8;
+      letter-spacing: 0;
+    }
+    .history-filters input[type="datetime-local"] {
+      background: #0c1b35;
+      border: 1px solid #2b4d79;
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.74rem;
+      padding: 4px 7px;
+    }
+    .btn-history-load {
+      padding: 6px 11px;
+      font-size: 0.74rem;
+      border-radius: 6px;
+      background: #204a7c;
+      color: #dcecff;
+      border: 1px solid #3e6da8;
+    }
+    .btn-history-load:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .history-status {
+      padding: 6px 12px;
+      font-size: 0.72rem;
+      color: #9db2c7;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
     }
     .pair-list {
       padding: 8px 12px;
@@ -746,7 +792,15 @@
 </div>
 
 <div class="pair-section">
-  <div class="pair-section-header">Captured Pairs</div>
+  <div class="pair-section-header">
+    <span>Captured Pairs</span>
+    <div class="history-filters">
+      <label>From <input type="datetime-local" id="historyStart" /></label>
+      <label>To <input type="datetime-local" id="historyEnd" /></label>
+      <button class="btn-history-load" id="btnHistoryLoad">Load</button>
+    </div>
+  </div>
+  <div class="history-status" id="historyStatus">History: waiting for initial load…</div>
   <div class="pair-list" id="pairList"></div>
 </div>
 
@@ -898,11 +952,22 @@
 let ws;
 let reconnectTimer;
 const frames = { cam1: 0, cam2: 0 };
+const HISTORY_PAGE_LIMIT = 200;
+const HISTORY_TOKEN_STORAGE_KEY = 'historyApiToken';
 
 // Pair list state
 const pairMap     = new Map();   // tsStr → { cam1, cam2, rowEl, badge1El, badge2El }
 const MAX_PAIRS   = 300;
 let   displayedTs = null;        // timestamp of the currently active pair row
+let   historyBootstrapped = false;
+let   historyLoading = false;
+
+let historyApiToken = '';
+try {
+  historyApiToken = localStorage.getItem(HISTORY_TOKEN_STORAGE_KEY) || '';
+} catch {
+  historyApiToken = '';
+}
 
 /* ── elements ── */
 const $dotServer = document.getElementById('dotServer');
@@ -913,6 +978,11 @@ const $btnStop   = document.getElementById('btnStop');
 const $stats     = document.getElementById('stats');
 const $fw1       = document.getElementById('fw1');
 const $fw2       = document.getElementById('fw2');
+const $pairList  = document.getElementById('pairList');
+const $historyStart = document.getElementById('historyStart');
+const $historyEnd = document.getElementById('historyEnd');
+const $historyStatus = document.getElementById('historyStatus');
+const $btnHistoryLoad = document.getElementById('btnHistoryLoad');
 
 const firmwareByCam = { cam1: null, cam2: null };
 
@@ -937,6 +1007,115 @@ function renderFirmwareLabels(masterPending, slavePending) {
   if ($fw2) $fw2.textContent = slavePending ? `${fwText2} (to be updated)` : fwText2;
 }
 
+function setHistoryStatus(text, isError = false) {
+  if (!$historyStatus) return;
+  $historyStatus.textContent = text;
+  $historyStatus.style.color = isError ? '#ff9696' : '#9db2c7';
+}
+
+function toDatetimeLocalValue(ms) {
+  const d = new Date(ms - (new Date().getTimezoneOffset() * 60_000));
+  return d.toISOString().slice(0, 16);
+}
+
+function initDefaultHistoryWindow() {
+  const now = Date.now();
+  if ($historyEnd && !$historyEnd.value) $historyEnd.value = toDatetimeLocalValue(now);
+  if ($historyStart && !$historyStart.value) $historyStart.value = toDatetimeLocalValue(now - 24 * 60 * 60 * 1000);
+}
+
+function getHistoryWindowMs() {
+  const startMs = $historyStart && $historyStart.value ? new Date($historyStart.value).getTime() : null;
+  const endMs = $historyEnd && $historyEnd.value ? new Date($historyEnd.value).getTime() : null;
+  return {
+    startMs: Number.isFinite(startMs) ? startMs : null,
+    endMs: Number.isFinite(endMs) ? endMs : null,
+  };
+}
+
+function setHistoryToken(token) {
+  historyApiToken = (token || '').trim();
+  try {
+    if (historyApiToken) localStorage.setItem(HISTORY_TOKEN_STORAGE_KEY, historyApiToken);
+    else localStorage.removeItem(HISTORY_TOKEN_STORAGE_KEY);
+  } catch {
+    // localStorage may be unavailable in some browser contexts.
+  }
+}
+
+function promptForHistoryToken() {
+  const entered = window.prompt('History API token required. Enter REGISTER_TOKEN for this server:', historyApiToken || '');
+  if (entered === null) return null;
+  setHistoryToken(entered);
+  return historyApiToken;
+}
+
+async function fetchWithHistoryAuth(url, options = {}, retryOnAuthFailure = true) {
+  const headers = new Headers(options.headers || {});
+  if (historyApiToken) headers.set('Authorization', `Bearer ${historyApiToken}`);
+  const response = await fetch(url, { ...options, headers });
+
+  if ((response.status === 401 || response.status === 403) && retryOnAuthFailure) {
+    const newToken = promptForHistoryToken();
+    if (!newToken) return response;
+    return fetchWithHistoryAuth(url, options, false);
+  }
+
+  return response;
+}
+
+function clearPairList() {
+  pairMap.clear();
+  displayedTs = null;
+  if ($pairList) $pairList.innerHTML = '';
+}
+
+async function loadHistoryMetadata({ replace = true } = {}) {
+  if (historyLoading) return;
+  historyLoading = true;
+  if ($btnHistoryLoad) $btnHistoryLoad.disabled = true;
+  setHistoryStatus('History: loading metadata...');
+
+  try {
+    const { startMs, endMs } = getHistoryWindowMs();
+    const qs = new URLSearchParams({ limit: String(HISTORY_PAGE_LIMIT) });
+    if (startMs !== null) qs.set('startMs', String(startMs));
+    if (endMs !== null) qs.set('endMs', String(endMs));
+
+    const response = await fetchWithHistoryAuth(`/api/history?${qs.toString()}`);
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+
+    const payload = await response.json();
+    if (replace) clearPairList();
+
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    for (let i = items.length - 1; i >= 0; i -= 1) {
+      const item = items[i];
+      if (!item || typeof item.tsStr !== 'string') continue;
+      if (item.cam1) addOrUpdatePairMetadata(item.tsStr, 'cam1', item.cam1);
+      if (item.cam2) addOrUpdatePairMetadata(item.tsStr, 'cam2', item.cam2);
+    }
+
+    setHistoryStatus(`History: loaded ${items.length} metadata row(s)`);
+  } catch (e) {
+    setHistoryStatus(`History: ${e.message}`, true);
+  } finally {
+    historyLoading = false;
+    if ($btnHistoryLoad) $btnHistoryLoad.disabled = false;
+  }
+}
+
+if ($btnHistoryLoad) {
+  $btnHistoryLoad.addEventListener('click', () => {
+    loadHistoryMetadata({ replace: true });
+  });
+}
+
+initDefaultHistoryWindow();
+
 /* ── WebSocket ── */
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -948,6 +1127,10 @@ function connect() {
     $stats.textContent = 'Connected to server';
     ws.send('browser');
     clearTimeout(reconnectTimer);
+    if (!historyBootstrapped) {
+      historyBootstrapped = true;
+      loadHistoryMetadata({ replace: true });
+    }
   };
 
   ws.onmessage = (e) => {
@@ -1025,7 +1208,7 @@ function connect() {
 
     frames[camId] = (frames[camId] || 0) + 1;
     const sizeKB = (jpeg.length / 1024).toFixed(1) + ' KB';
-    meta.textContent = `${sizeKB} KB  ·  #${frames[camId]}`;
+    meta.textContent = `${sizeKB}  ·  #${frames[camId]}`;
     addOrUpdatePair(tsStr, camId, jpeg, frames[camId], sizeKB);
 
     $stats.textContent =
@@ -1058,16 +1241,14 @@ function formatTs(tsStr) {
   return tsStr.length > 10 ? '\u2026' + tsStr.slice(-10) : tsStr;
 }
 
-function addOrUpdatePair(tsStr, camId, jpeg, frameNum, sizeKB) {
-  const blob = new Blob([jpeg], { type: 'image/jpeg' });
-
+function ensurePairEntry(tsStr) {
   if (!pairMap.has(tsStr)) {
     // Evict oldest row when at capacity
     if (pairMap.size >= MAX_PAIRS) {
       const oldestKey = pairMap.keys().next().value;
       const oldEntry  = pairMap.get(oldestKey);
       pairMap.delete(oldestKey);
-      oldEntry.rowEl.remove();
+      if (oldEntry && oldEntry.rowEl) oldEntry.rowEl.remove();
     }
 
     const rowEl    = document.createElement('div');
@@ -1089,28 +1270,28 @@ function addOrUpdatePair(tsStr, camId, jpeg, frameNum, sizeKB) {
     dlBtn.className   = 'btn-pair-dl';
     dlBtn.title       = 'Download both images';
     dlBtn.textContent = '\u2b07';
-    dlBtn.addEventListener('click', e => { e.stopPropagation(); downloadPair(tsStr); });
+    dlBtn.addEventListener('click', e => { e.stopPropagation(); void downloadPair(tsStr); });
 
     const comboBtn = document.createElement('button');
     comboBtn.className   = 'btn-pair-combo';
     comboBtn.title       = 'Download cam2+cam1 side-by-side image';
     comboBtn.textContent = '↔ Combo';
     comboBtn.disabled    = true;
-    comboBtn.addEventListener('click', e => { e.stopPropagation(); downloadPairCombined(tsStr); });
+    comboBtn.addEventListener('click', e => { e.stopPropagation(); void downloadPairCombined(tsStr); });
 
     const depthBtn = document.createElement('button');
     depthBtn.className   = 'btn-depth';
     depthBtn.title       = 'Compute stereo depth map';
     depthBtn.textContent = '⊡ Depth';
     depthBtn.disabled    = true;
-    depthBtn.addEventListener('click', e => { e.stopPropagation(); requestStereoView(tsStr, 'depth'); });
+    depthBtn.addEventListener('click', e => { e.stopPropagation(); void requestStereoView(tsStr, 'depth'); });
 
     const undistortBtn = document.createElement('button');
     undistortBtn.className   = 'btn-undistort';
     undistortBtn.title       = 'Show rectified undistorted pair';
     undistortBtn.textContent = '◫ Undistort';
     undistortBtn.disabled    = true;
-    undistortBtn.addEventListener('click', e => { e.stopPropagation(); requestStereoView(tsStr, 'undistort'); });
+    undistortBtn.addEventListener('click', e => { e.stopPropagation(); void requestStereoView(tsStr, 'undistort'); });
 
     rowEl.appendChild(tsSpan);
     rowEl.appendChild(badge1El);
@@ -1121,28 +1302,38 @@ function addOrUpdatePair(tsStr, camId, jpeg, frameNum, sizeKB) {
     detectBtn.title       = 'Run MegaDetector on cam1';
     detectBtn.textContent = '⊙ Detect';
     detectBtn.disabled    = true;
-    detectBtn.addEventListener('click', e => { e.stopPropagation(); requestDetection(tsStr); });
+    detectBtn.addEventListener('click', e => { e.stopPropagation(); void requestDetection(tsStr); });
 
     rowEl.appendChild(comboBtn);
     rowEl.appendChild(depthBtn);
     rowEl.appendChild(undistortBtn);
     rowEl.appendChild(detectBtn);
-    rowEl.addEventListener('click', () => showPair(tsStr));
+    rowEl.addEventListener('click', () => { void showPair(tsStr); });
 
-    const $pairList = document.getElementById('pairList');
     $pairList.insertBefore(rowEl, $pairList.firstChild);
 
-    pairMap.set(tsStr, { cam1: null, cam2: null, rowEl, badge1El, badge2El, comboBtn, depthBtn, undistortBtn, detectBtn });
+    pairMap.set(tsStr, {
+      cam1: null,
+      cam2: null,
+      rowEl,
+      badge1El,
+      badge2El,
+      comboBtn,
+      depthBtn,
+      undistortBtn,
+      detectBtn,
+      latestByProcess: {},  // tsStr → process → artifact URL
+    });
   }
 
-  const entry   = pairMap.get(tsStr);
-  entry[camId]  = { blob, sizeKB, frameNum };
+  return pairMap.get(tsStr);
+}
 
+function updatePairBadge(entry, camId, sizeKB) {
   const badgeEl = camId === 'cam1' ? entry.badge1El : entry.badge2El;
   badgeEl.textContent = `Cam ${camId === 'cam1' ? '1' : '2'}: ${sizeKB}`;
   badgeEl.classList.remove('missing');
 
-  // Enable buttons once both images have arrived
   if (entry.cam1 && entry.cam2) {
     if (entry.comboBtn) entry.comboBtn.disabled = false;
     if (entry.depthBtn) entry.depthBtn.disabled = false;
@@ -1151,34 +1342,116 @@ function addOrUpdatePair(tsStr, camId, jpeg, frameNum, sizeKB) {
   }
 }
 
-function showPair(tsStr) {
+function addOrUpdatePair(tsStr, camId, jpeg, frameNum, sizeKB) {
+  const entry = ensurePairEntry(tsStr);
+  entry[camId] = {
+    blob: new Blob([jpeg], { type: 'image/jpeg' }),
+    sizeKB,
+    frameNum,
+    fetchUrl: null,
+    loadingPromise: null,
+  };
+  updatePairBadge(entry, camId, sizeKB);
+}
+
+function addOrUpdatePairMetadata(tsStr, camId, metadata) {
+  const entry = ensurePairEntry(tsStr);
+  const sizeKB = metadata && metadata.sizeKB ? `${metadata.sizeKB} KB` : '0.0 KB';
+
+  if (entry[camId] && entry[camId].blob) return;
+
+  entry[camId] = {
+    blob: null,
+    sizeKB,
+    frameNum: null,
+    fetchUrl: metadata && metadata.url ? metadata.url : null,
+    loadingPromise: null,
+  };
+  updatePairBadge(entry, camId, sizeKB);
+}
+
+async function ensureCameraBlobLoaded(tsStr, camId) {
+  const entry = pairMap.get(tsStr);
+  if (!entry || !entry[camId]) return false;
+  const camEntry = entry[camId];
+  if (camEntry.blob) return true;
+  if (!camEntry.fetchUrl) return false;
+
+  if (!camEntry.loadingPromise) {
+    camEntry.loadingPromise = (async () => {
+      const res = await fetchWithHistoryAuth(camEntry.fetchUrl);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      camEntry.blob = await res.blob();
+      return true;
+    })().finally(() => {
+      camEntry.loadingPromise = null;
+    });
+  }
+
+  await camEntry.loadingPromise;
+  return !!camEntry.blob;
+}
+
+async function ensurePairBlobs(tsStr, camIds = ['cam1', 'cam2']) {
+  for (const camId of camIds) {
+    const loaded = await ensureCameraBlobLoaded(tsStr, camId);
+    if (!loaded) return false;
+  }
+  return true;
+}
+
+async function showPair(tsStr) {
   if (displayedTs) {
     const prev = pairMap.get(displayedTs);
     if (prev) prev.rowEl.classList.remove('active');
   }
+
   displayedTs = tsStr;
   const entry = pairMap.get(tsStr);
   if (!entry) return;
   entry.rowEl.classList.add('active');
 
+  setHistoryStatus(`History: loading image(s) for ${formatTs(tsStr)}...`);
   for (const camId of ['cam1', 'cam2']) {
     const num    = camId === 'cam1' ? '1' : '2';
     const imgEl  = document.getElementById('img'  + num);
     const phEl   = document.getElementById('ph'   + num);
     const metaEl = document.getElementById('meta' + num);
     if (!imgEl || !entry[camId]) continue;
+
+    try {
+      await ensureCameraBlobLoaded(tsStr, camId);
+    } catch (e) {
+      setHistoryStatus(`History: ${e.message}`, true);
+      continue;
+    }
+    if (!entry[camId].blob) continue;
+
     const url = URL.createObjectURL(entry[camId].blob);
     if (imgEl.src.startsWith('blob:')) URL.revokeObjectURL(imgEl.src);
     imgEl.src = url;
     imgEl.classList.add('show');
     phEl.classList.add('hide');
-    metaEl.textContent = `${entry[camId].sizeKB}  ·  #${entry[camId].frameNum}`;
+
+    const frameSuffix = Number.isFinite(entry[camId].frameNum)
+      ? `  ·  #${entry[camId].frameNum}`
+      : '  ·  history';
+    metaEl.textContent = `${entry[camId].sizeKB}${frameSuffix}`;
   }
+
+  setHistoryStatus(`History: selected pair ${formatTs(tsStr)}`);
 }
 
-function downloadPair(tsStr) {
+async function downloadPair(tsStr) {
   const entry = pairMap.get(tsStr);
   if (!entry) return;
+
+  const ready = await ensurePairBlobs(tsStr);
+  if (!ready) return;
+
   for (const camId of ['cam1', 'cam2']) {
     if (!entry[camId]) continue;
     const url = URL.createObjectURL(entry[camId].blob);
@@ -1214,6 +1487,9 @@ async function decodeBlobToImage(blob) {
 async function downloadPairCombined(tsStr) {
   const entry = pairMap.get(tsStr);
   if (!entry || !entry.cam1 || !entry.cam2) return;
+
+  const ready = await ensurePairBlobs(tsStr);
+  if (!ready) return;
 
   const cam2Img = await decodeBlobToImage(entry.cam2.blob);
   const cam1Img = await decodeBlobToImage(entry.cam1.blob);
@@ -1278,28 +1554,32 @@ async function downloadUndistortedPair(tsStr) {
   try {
     dlLink.textContent = 'Preparing cam1/cam2 files…';
 
-    const resCam1 = await fetch('/api/depthmap', {
-      method: 'POST',
-      body: buildStereoFormData(entry, 'undistort_cam1'),
-    });
-    if (!resCam1.ok) {
-      const err = await resCam1.json().catch(() => ({ error: `HTTP ${resCam1.status}` }));
-      throw new Error(err.error || `HTTP ${resCam1.status}`);
-    }
-    const cam1Blob = await resCam1.blob();
+    // Helper: get blob for a single undistort mode — from cache URL or new request
+    const getUndistortBlob = async (mode) => {
+      if (entry.latestByProcess[mode]) {
+        const r = await fetch(entry.latestByProcess[mode]);
+        if (!r.ok) throw new Error(`HTTP ${r.status} fetching cached ${mode}`);
+        return r.blob();
+      }
+      const fd = buildStereoFormData(entry, mode);
+      fd.append('tsStr', tsStr);
+      const res = await fetch('/api/depthmap', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      entry.latestByProcess[mode] = data.url;
+      const r2 = await fetch(data.url);
+      if (!r2.ok) throw new Error(`HTTP ${r2.status}`);
+      return r2.blob();
+    };
 
-    const resCam2 = await fetch('/api/depthmap', {
-      method: 'POST',
-      body: buildStereoFormData(entry, 'undistort_cam2'),
-    });
-    if (!resCam2.ok) {
-      const err = await resCam2.json().catch(() => ({ error: `HTTP ${resCam2.status}` }));
-      throw new Error(err.error || `HTTP ${resCam2.status}`);
-    }
-    const cam2Blob = await resCam2.blob();
+    const cam1Blob = await getUndistortBlob('undistort_cam1');
+    const cam2Blob = await getUndistortBlob('undistort_cam2');
 
-    downloadBlob(cam1Blob, `cam1_undistorted_${tsStr}.png`);
-    downloadBlob(cam2Blob, `cam2_undistorted_${tsStr}.png`);
+    downloadBlob(cam1Blob, `${tsStr}_undistort_cam1.png`);
+    downloadBlob(cam2Blob, `${tsStr}_undistort_cam2.png`);
     statusEl.textContent = `Undistorted cam1/cam2 saved · pair ${tsStr}`;
   } catch (e) {
     statusEl.textContent = 'Error: ' + e.message;
@@ -1312,6 +1592,12 @@ async function downloadUndistortedPair(tsStr) {
 async function requestStereoView(tsStr, viewMode) {
   const entry = pairMap.get(tsStr);
   if (!entry || !entry.cam1 || !entry.cam2) return;
+
+  const ready = await ensurePairBlobs(tsStr, ['cam1', 'cam2']);
+  if (!ready) {
+    setHistoryStatus('History: could not load required pair images', true);
+    return;
+  }
 
   const mode = viewMode === 'undistort' ? 'undistort' : 'depth';
 
@@ -1338,6 +1624,7 @@ async function requestStereoView(tsStr, viewMode) {
   dlLink.onclick = null;
 
   const fd = buildStereoFormData(entry, mode);
+  fd.append('tsStr', tsStr);
 
   try {
     statusEl.textContent = mode === 'undistort'
@@ -1350,16 +1637,20 @@ async function requestStereoView(tsStr, viewMode) {
       throw new Error(err.error || `HTTP ${res.status}`);
     }
 
-    const blob = await res.blob();
+    const data = await res.json();
+    const artifactUrl = data.url;
 
-    // Revoke previous result URL to avoid memory leak
-    if (depthBlobUrl) URL.revokeObjectURL(depthBlobUrl);
-    depthBlobUrl = URL.createObjectURL(blob);
+    // Store in per-tsStr artifact state
+    const processName = mode === 'depth' ? 'depthmap' : mode;
+    entry.latestByProcess[processName] = artifactUrl;
+
+    // Revoke previous blob URL (if any) and display from server URL
+    if (depthBlobUrl) { URL.revokeObjectURL(depthBlobUrl); depthBlobUrl = null; }
 
     resultImg.onload = () => {
       if (measureState.active) { syncCanvasSize(); drawMeasureOverlay(); }
     };
-    resultImg.src = depthBlobUrl;
+    resultImg.src = artifactUrl;
     resultImg.classList.add('show');
 
     if (mode === 'undistort') {
@@ -1372,8 +1663,8 @@ async function requestStereoView(tsStr, viewMode) {
       dlLink.textContent = '⬇ Save Undistorted Pair';
     } else {
       dlLink.onclick = null;
-      dlLink.href = depthBlobUrl;
-      dlLink.download = `depthmap_${tsStr}.png`;
+      dlLink.href = artifactUrl;
+      dlLink.download = `${tsStr}_depthmap.png`;
       dlLink.textContent = '⬇ Save Depth Map';
     }
     dlLink.classList.add('show');
@@ -1419,7 +1710,7 @@ async function requestStereoView(tsStr, viewMode) {
 
 async function requestDetection(tsStr) {
   const entry = pairMap.get(tsStr);
-  if (!entry || !entry.cam1) return;
+  if (!entry) return;
 
   const panel     = document.getElementById('depthPanel');
   const titleEl   = document.getElementById('depthPanelTitle');
@@ -1433,7 +1724,6 @@ async function requestDetection(tsStr) {
   }
   panel.classList.add('visible');
   titleEl.textContent = '⊙ MegaDetector Result';
-  statusEl.textContent = 'Running MegaDetector on cam1…';
   statusEl.className   = 'depth-status';
   resultImg.classList.remove('show');
   dlLink.classList.remove('show');
@@ -1443,7 +1733,26 @@ async function requestDetection(tsStr) {
   if ($btnMeasure) $btnMeasure.style.display = 'none';
 
   const fd = new FormData();
-  fd.append('cam1', entry.cam1.blob, 'cam1.jpg');
+  fd.append('tsStr', tsStr);
+
+  // Chain from depthmap artifact if available; otherwise upload cam1 directly
+  if (entry.latestByProcess && entry.latestByProcess.depthmap) {
+    fd.append('sourceProcess', 'depthmap');
+    statusEl.textContent = 'Running MegaDetector on depth map…';
+  } else {
+    if (!entry.cam1) {
+      if (entry.detectBtn) { entry.detectBtn.disabled = false; entry.detectBtn.textContent = '⊙ Detect'; }
+      return;
+    }
+    const ready = await ensurePairBlobs(tsStr, ['cam1']);
+    if (!ready) {
+      setHistoryStatus('History: could not load cam1 image', true);
+      if (entry.detectBtn) { entry.detectBtn.disabled = false; entry.detectBtn.textContent = '⊙ Detect'; }
+      return;
+    }
+    fd.append('cam1', entry.cam1.blob, 'cam1.jpg');
+    statusEl.textContent = 'Running MegaDetector on cam1…';
+  }
 
   try {
     const res = await fetch('/api/detect', { method: 'POST', body: fd });
@@ -1453,16 +1762,18 @@ async function requestDetection(tsStr) {
       throw new Error(err.error || `HTTP ${res.status}`);
     }
 
-    const blob = await res.blob();
-    if (depthBlobUrl) URL.revokeObjectURL(depthBlobUrl);
-    depthBlobUrl = URL.createObjectURL(blob);
+    const data = await res.json();
+    const artifactUrl = data.url;
+    entry.latestByProcess.detection = artifactUrl;
 
-    resultImg.src = depthBlobUrl;
+    if (depthBlobUrl) { URL.revokeObjectURL(depthBlobUrl); depthBlobUrl = null; }
+
+    resultImg.src = artifactUrl;
     resultImg.classList.add('show');
 
     dlLink.onclick = null;
-    dlLink.href = depthBlobUrl;
-    dlLink.download = `detection_${tsStr}.png`;
+    dlLink.href = artifactUrl;
+    dlLink.download = `${tsStr}_detection.png`;
     dlLink.textContent = '⬇ Save Detection';
     dlLink.classList.add('show');
 

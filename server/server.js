@@ -25,6 +25,7 @@ const multer  = require('multer');
 const app    = express();
 app.set('trust proxy', 1);
 const REGISTER_TOKEN = process.env.REGISTER_TOKEN;
+const DATA_ROOT = process.env.DATA_ROOT;
 const server = http.createServer(app);
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -34,18 +35,315 @@ const DEPTHMAP_PY      = path.join(__dirname, 'depthmap.py');
 const TRIANGULATION_PY = path.join(__dirname, 'triangulation.py');
 const DETECTION_PY     = path.join(__dirname, 'detection.py');
 const CALIB_JSON       = path.join(__dirname, 'calibration.json');
+const FRAME_ROOT       = path.join(DATA_ROOT, 'frames');
+const FRAME_INDEX_FILE = path.join(DATA_ROOT, 'frame_index.ndjson');
+const PROCESSED_ROOT        = path.join(DATA_ROOT, 'processed');
+const PROCESSED_INDEX_FILE  = path.join(DATA_ROOT, 'processed_index.ndjson');
+const HISTORY_DEFAULT_LIMIT = 200;
+const HISTORY_MAX_LIMIT = 2000;
+
+// Process enum — all valid process identifiers for the artifact pipeline
+const VALID_PROCESSES = new Set([
+  'undistort', 'undistort_cam1', 'undistort_cam2', 'depthmap', 'detection', 'segmentation',
+]);
+
+const persistedFrames = [];
+
+function extractAuthToken(req) {
+  const authHeader = req.get('authorization');
+  if (!authHeader) return '';
+  const trimmed = authHeader.trim();
+  if (/^bearer\s+/i.test(trimmed)) return trimmed.replace(/^bearer\s+/i, '').trim();
+  return trimmed;
+}
+
+function requireHistoryAuth(req, res, next) {
+  if (!REGISTER_TOKEN) return next();
+  const token = extractAuthToken(req);
+  if (!token) return res.status(401).json({ error: 'Authorization token is required' });
+  if (token !== REGISTER_TOKEN) return res.status(403).json({ error: 'Invalid authorization token' });
+  next();
+}
+
+function parseTimestampMs(tsStr) {
+  if (typeof tsStr !== 'string' || !/^\d+$/.test(tsStr)) return null;
+  const n = Number(tsStr);
+  if (!Number.isFinite(n)) return null;
+  if (tsStr.length >= 16) return Math.floor(n / 1000);
+  if (tsStr.length === 13) return n;
+  if (tsStr.length === 10) return n * 1000;
+  return n;
+}
+
+function ensurePersistenceStorage() {
+  fs.mkdirSync(FRAME_ROOT, { recursive: true });
+  if (!fs.existsSync(FRAME_INDEX_FILE)) {
+    fs.writeFileSync(FRAME_INDEX_FILE, '');
+  }
+}
+
+function loadPersistedFramesFromIndex() {
+  let raw = '';
+  try {
+    raw = fs.readFileSync(FRAME_INDEX_FILE, 'utf8');
+  } catch (e) {
+    console.warn('[history] Failed to read frame index:', e.message);
+    return;
+  }
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (!parsed || typeof parsed !== 'object') continue;
+      if (typeof parsed.camId !== 'string') continue;
+      if (typeof parsed.tsStr !== 'string') continue;
+      if (typeof parsed.relPath !== 'string') continue;
+      parsed.tsMs = parseTimestampMs(parsed.tsStr);
+      if (!Number.isFinite(parsed.tsMs)) continue;
+      persistedFrames.push(parsed);
+    } catch {
+      // Keep startup resilient even if one index line is malformed.
+    }
+  }
+}
+
+function makeHistoryImageUrl(camId, tsStr) {
+  return `/api/history/image?camId=${encodeURIComponent(camId)}&ts=${encodeURIComponent(tsStr)}`;
+}
+
+function persistIncomingFrame(camId, tsStr, jpegData) {
+  const safeCamId = String(camId || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const camDir = path.join(FRAME_ROOT, safeCamId);
+  const fileName = `${tsStr}.jpg`;
+  const absPath = path.join(camDir, fileName);
+  const relPath = path.relative(__dirname, absPath).split(path.sep).join('/');
+
+  fs.mkdir(camDir, { recursive: true }, (mkdirErr) => {
+    if (mkdirErr) {
+      console.warn('[history] mkdir failed:', mkdirErr.message);
+      return;
+    }
+
+    fs.writeFile(absPath, jpegData, (writeErr) => {
+      if (writeErr) {
+        console.warn('[history] frame write failed:', writeErr.message);
+        return;
+      }
+
+      const entry = {
+        camId,
+        tsStr,
+        tsMs: parseTimestampMs(tsStr),
+        sizeBytes: jpegData.length,
+        relPath,
+        storedAtMs: Date.now(),
+      };
+
+      if (!Number.isFinite(entry.tsMs)) return;
+      persistedFrames.push(entry);
+      fs.appendFile(FRAME_INDEX_FILE, JSON.stringify(entry) + '\n', (appendErr) => {
+        if (appendErr) {
+          console.warn('[history] frame index append failed:', appendErr.message);
+        }
+      });
+    });
+  });
+}
+
+ensurePersistenceStorage();
+loadPersistedFramesFromIndex();
+
+// ─── Processed artifact helpers ───────────────────────────────────────────────
+function sanitizeProcess(proc) {
+  if (typeof proc !== 'string') return null;
+  const p = proc.trim().toLowerCase();
+  return VALID_PROCESSES.has(p) ? p : null;
+}
+
+function buildArtifactFileName(tsStr, proc, ext) {
+  return `${tsStr}_${proc}.${ext}`;
+}
+
+const processedArtifacts = [];
+
+function ensureProcessedStorage() {
+  fs.mkdirSync(PROCESSED_ROOT, { recursive: true });
+  if (!fs.existsSync(PROCESSED_INDEX_FILE)) {
+    fs.writeFileSync(PROCESSED_INDEX_FILE, '');
+  }
+}
+
+function loadProcessedArtifactsFromIndex() {
+  let raw = '';
+  try { raw = fs.readFileSync(PROCESSED_INDEX_FILE, 'utf8'); }
+  catch (e) { console.warn('[processed] Failed to read index:', e.message); return; }
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (!parsed || typeof parsed !== 'object') continue;
+      if (typeof parsed.tsStr !== 'string' || typeof parsed.process !== 'string') continue;
+      processedArtifacts.push(parsed);
+    } catch { /* skip malformed lines */ }
+  }
+}
+
+function registerProcessedArtifact(record) {
+  const idx = processedArtifacts.findIndex(r => r.tsStr === record.tsStr && r.process === record.process);
+  if (idx !== -1) {
+    processedArtifacts[idx] = record;
+    // Full rewrite for overwrite (deterministic reference)
+    const content = processedArtifacts.map(r => JSON.stringify(r)).join('\n') + '\n';
+    fs.writeFile(PROCESSED_INDEX_FILE, content, (err) => {
+      if (err) console.warn('[processed] index rewrite failed:', err.message);
+    });
+  } else {
+    processedArtifacts.push(record);
+    fs.appendFile(PROCESSED_INDEX_FILE, JSON.stringify(record) + '\n', (err) => {
+      if (err) console.warn('[processed] index append failed:', err.message);
+    });
+  }
+}
+
+function getLatestArtifact(tsStr, proc) {
+  for (let i = processedArtifacts.length - 1; i >= 0; i--) {
+    const r = processedArtifacts[i];
+    if (r.tsStr === tsStr && r.process === proc) return r;
+  }
+  return null;
+}
+
+ensureProcessedStorage();
+loadProcessedArtifactsFromIndex();
+
+app.get('/api/history', requireHistoryAuth, (req, res) => {
+  const startMsRaw = req.query.startMs;
+  const endMsRaw = req.query.endMs;
+  const offsetRaw = req.query.offset;
+  const limitRaw = req.query.limit;
+
+  const startMs = startMsRaw == null || startMsRaw === '' ? null : Number(startMsRaw);
+  const endMs = endMsRaw == null || endMsRaw === '' ? null : Number(endMsRaw);
+  const offset = Math.max(0, Number(offsetRaw || 0) || 0);
+  const requestedLimit = Number(limitRaw || HISTORY_DEFAULT_LIMIT) || HISTORY_DEFAULT_LIMIT;
+  const limit = Math.min(HISTORY_MAX_LIMIT, Math.max(1, requestedLimit));
+
+  if (startMs !== null && !Number.isFinite(startMs)) {
+    return res.status(400).json({ error: 'startMs must be a number' });
+  }
+  if (endMs !== null && !Number.isFinite(endMs)) {
+    return res.status(400).json({ error: 'endMs must be a number' });
+  }
+  if (startMs !== null && endMs !== null && startMs > endMs) {
+    return res.status(400).json({ error: 'startMs cannot be greater than endMs' });
+  }
+
+  const groupedByTs = new Map();
+  for (let i = persistedFrames.length - 1; i >= 0; i -= 1) {
+    const entry = persistedFrames[i];
+    if (!entry || !Number.isFinite(entry.tsMs)) continue;
+    if (startMs !== null && entry.tsMs < startMs) continue;
+    if (endMs !== null && entry.tsMs > endMs) continue;
+
+    if (!groupedByTs.has(entry.tsStr)) {
+      groupedByTs.set(entry.tsStr, {
+        tsStr: entry.tsStr,
+        tsMs: entry.tsMs,
+        cam1: null,
+        cam2: null,
+      });
+    }
+    const row = groupedByTs.get(entry.tsStr);
+    if (entry.camId !== 'cam1' && entry.camId !== 'cam2') continue;
+    if (row[entry.camId]) continue;
+
+    row[entry.camId] = {
+      camId: entry.camId,
+      sizeBytes: entry.sizeBytes,
+      sizeKB: (entry.sizeBytes / 1024).toFixed(1),
+      url: makeHistoryImageUrl(entry.camId, entry.tsStr),
+      storedAtMs: entry.storedAtMs,
+    };
+  }
+
+  const rows = Array.from(groupedByTs.values()).sort((a, b) => b.tsMs - a.tsMs);
+  const paged = rows.slice(offset, offset + limit);
+
+  res.json({
+    items: paged,
+    total: rows.length,
+    offset,
+    limit,
+  });
+});
+
+app.get('/api/history/image', requireHistoryAuth, (req, res) => {
+  const camId = String(req.query.camId || '');
+  const tsStr = String(req.query.ts || '');
+  if (!camId || !tsStr) {
+    return res.status(400).json({ error: 'camId and ts are required' });
+  }
+
+  let matched = null;
+  for (let i = persistedFrames.length - 1; i >= 0; i -= 1) {
+    const entry = persistedFrames[i];
+    if (entry.camId === camId && entry.tsStr === tsStr) {
+      matched = entry;
+      break;
+    }
+  }
+  if (!matched) {
+    return res.status(404).json({ error: 'Image not found' });
+  }
+
+  const absPath = path.join(__dirname, matched.relPath);
+  if (!fs.existsSync(absPath)) {
+    return res.status(404).json({ error: 'Image file is missing on disk' });
+  }
+
+  res.setHeader('Content-Type', 'image/jpeg');
+  res.setHeader('Cache-Control', 'private, max-age=60');
+  res.sendFile(absPath);
+});
 
 app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 'cam2', maxCount: 1 }]), (req, res) => {
   const files = req.files;
-  if (!files || !files.cam1 || !files.cam2) {
-    return res.status(400).json({ error: 'Both cam1 and cam2 files are required' });
-  }
 
   const requestedMode = typeof req.body?.viewMode === 'string'
     ? req.body.viewMode.trim().toLowerCase()
     : 'depth';
   if (!['depth', 'undistort', 'undistort_cam1', 'undistort_cam2'].includes(requestedMode)) {
     return res.status(400).json({ error: 'Invalid viewMode. Expected depth, undistort, undistort_cam1 or undistort_cam2' });
+  }
+
+  const tsStr = typeof req.body?.tsStr === 'string' ? req.body.tsStr.trim() : null;
+  if (tsStr !== null && !/^\d+$/.test(tsStr)) {
+    return res.status(400).json({ error: 'Invalid tsStr format: must be numeric' });
+  }
+
+  // Determine input buffers
+  let cam1Buffer = null;
+  let cam2Buffer = null;
+
+  if (tsStr && !files?.cam1 && !files?.cam2) {
+    // Chain mode: resolve raw frames from persisted history
+    const cam1Frame = persistedFrames.find(f => f.tsStr === tsStr && f.camId === 'cam1');
+    const cam2Frame = persistedFrames.find(f => f.tsStr === tsStr && f.camId === 'cam2');
+    if (!cam1Frame || !cam2Frame) {
+      return res.status(404).json({ error: `No cam1/cam2 frames found in history for tsStr=${tsStr}` });
+    }
+    try {
+      cam1Buffer = fs.readFileSync(path.join(__dirname, cam1Frame.relPath));
+      cam2Buffer = fs.readFileSync(path.join(__dirname, cam2Frame.relPath));
+    } catch (e) {
+      return res.status(404).json({ error: 'Frame files not found on disk' });
+    }
+  } else {
+    if (!files || !files.cam1 || !files.cam2) {
+      return res.status(400).json({ error: 'Both cam1 and cam2 files are required' });
+    }
+    cam1Buffer = files.cam1[0].buffer;
+    cam2Buffer = files.cam2[0].buffer;
   }
 
   // Write uploaded buffers to unique temp files
@@ -62,8 +360,8 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
   };
 
   try {
-    fs.writeFileSync(img1, files.cam1[0].buffer);
-    fs.writeFileSync(img2, files.cam2[0].buffer);
+    fs.writeFileSync(img1, cam1Buffer);
+    fs.writeFileSync(img2, cam2Buffer);
   } catch (e) {
     cleanup();
     return res.status(500).json({ error: 'Failed to write temp files: ' + e.message });
@@ -92,6 +390,48 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
 
   const outputMode = typeof pyOut.mode === 'string' ? pyOut.mode : requestedMode;
   console.log(`[depthmap] ${outputMode} (${pyOut.calibrated ? 'calibrated' : 'uncalibrated'}) written to ${outPng}`);
+
+  if (tsStr) {
+    // Persist output with tsStr-based naming
+    const processName = outputMode === 'depth' ? 'depthmap' : outputMode;
+    const tsDir = path.join(PROCESSED_ROOT, tsStr);
+    try { fs.mkdirSync(tsDir, { recursive: true }); } catch (e) {
+      cleanup();
+      return res.status(500).json({ error: 'Failed to create output dir: ' + e.message });
+    }
+    const outFileName = buildArtifactFileName(tsStr, processName, 'png');
+    const persistedAbsPath = path.join(tsDir, outFileName);
+    const relPath = path.relative(__dirname, persistedAbsPath).split(path.sep).join('/');
+    try { fs.copyFileSync(outPng, persistedAbsPath); } catch (e) {
+      cleanup();
+      return res.status(500).json({ error: 'Failed to persist output: ' + e.message });
+    }
+
+    const record = {
+      tsStr,
+      process: processName,
+      ext: 'png',
+      relPath,
+      absPath: persistedAbsPath,
+      sourceProcess: null,
+      sourceRelPath: null,
+      createdAtMs: Date.now(),
+      metadata: { calibrated: pyOut.calibrated || false },
+    };
+    registerProcessedArtifact(record);
+    cleanup();
+
+    return res.json({
+      success: true,
+      tsStr,
+      process: processName,
+      url: `/api/processed/${encodeURIComponent(tsStr)}/${encodeURIComponent(outFileName)}`,
+      relPath,
+      calibrated: pyOut.calibrated || false,
+    });
+  }
+
+  // Legacy mode (no tsStr): return blob download
   let fileName = 'depthmap.png';
   if (outputMode === 'undistort') fileName = 'undistorted_preview.png';
   if (outputMode === 'undistort_cam1') fileName = 'undistorted_cam1.png';
@@ -149,11 +489,42 @@ app.post('/api/triangulate', express.json({ limit: '4kb' }), (req, res) => {
   res.json(pyOut);
 });
 
-// ─── MegaDetector endpoint ─────────────────────────────────────────────────────
+// ─── Detection/Segmentation endpoint ─────────────────────────────────────────────────────
 app.post('/api/detect', upload.fields([{ name: 'cam1', maxCount: 1 }]), (req, res) => {
   const files = req.files;
-  if (!files || !files.cam1) {
-    return res.status(400).json({ error: 'cam1 file is required' });
+
+  const tsStr = typeof req.body?.tsStr === 'string' ? req.body.tsStr.trim() : null;
+  if (tsStr !== null && !/^\d+$/.test(tsStr)) {
+    return res.status(400).json({ error: 'Invalid tsStr format: must be numeric' });
+  }
+
+  const requestedSource = typeof req.body?.sourceProcess === 'string'
+    ? sanitizeProcess(req.body.sourceProcess)
+    : null;
+
+  let inputBuffer = null;
+  let resolvedSourceProcess = null;
+
+  if (tsStr && !files?.cam1) {
+    // Chain mode: resolve prior artifact from registry
+    const preferredSource = requestedSource || 'depthmap';
+    const sourceArt = getLatestArtifact(tsStr, preferredSource);
+    if (!sourceArt) {
+      return res.status(404).json({
+        error: `No prior artifact found for tsStr=${tsStr}, process=${preferredSource}. Run ${preferredSource} first or upload cam1 directly.`,
+      });
+    }
+    try {
+      inputBuffer = fs.readFileSync(sourceArt.absPath);
+    } catch (e) {
+      return res.status(404).json({ error: 'Prior artifact file not found on disk' });
+    }
+    resolvedSourceProcess = preferredSource;
+  } else {
+    if (!files || !files.cam1) {
+      return res.status(400).json({ error: 'cam1 file is required' });
+    }
+    inputBuffer = files.cam1[0].buffer;
   }
 
   const id     = crypto.randomUUID();
@@ -168,7 +539,7 @@ app.post('/api/detect', upload.fields([{ name: 'cam1', maxCount: 1 }]), (req, re
   };
 
   try {
-    fs.writeFileSync(img1, files.cam1[0].buffer);
+    fs.writeFileSync(img1, inputBuffer);
   } catch (e) {
     cleanup();
     return res.status(500).json({ error: 'Failed to write temp file: ' + e.message });
@@ -192,10 +563,91 @@ app.post('/api/detect', upload.fields([{ name: 'cam1', maxCount: 1 }]), (req, re
   }
 
   console.log(`[detect] ${pyOut.detections} detection(s) written to ${outPng}`);
+
+  if (tsStr) {
+    const tsDir = path.join(PROCESSED_ROOT, tsStr);
+    try { fs.mkdirSync(tsDir, { recursive: true }); } catch (e) {
+      cleanup();
+      return res.status(500).json({ error: 'Failed to create output dir: ' + e.message });
+    }
+    const outFileName = buildArtifactFileName(tsStr, 'detection', 'png');
+    const persistedAbsPath = path.join(tsDir, outFileName);
+    const relPath = path.relative(__dirname, persistedAbsPath).split(path.sep).join('/');
+    try { fs.copyFileSync(outPng, persistedAbsPath); } catch (e) {
+      cleanup();
+      return res.status(500).json({ error: 'Failed to persist output: ' + e.message });
+    }
+
+    const sourceArtRecord = resolvedSourceProcess ? getLatestArtifact(tsStr, resolvedSourceProcess) : null;
+    const record = {
+      tsStr,
+      process: 'detection',
+      ext: 'png',
+      relPath,
+      absPath: persistedAbsPath,
+      sourceProcess: resolvedSourceProcess,
+      sourceRelPath: sourceArtRecord ? sourceArtRecord.relPath : null,
+      createdAtMs: Date.now(),
+      metadata: { detections: pyOut.detections || 0 },
+    };
+    registerProcessedArtifact(record);
+    cleanup();
+
+    return res.json({
+      success: true,
+      tsStr,
+      process: 'detection',
+      url: `/api/processed/${encodeURIComponent(tsStr)}/${encodeURIComponent(outFileName)}`,
+      relPath,
+      detections: pyOut.detections || 0,
+    });
+  }
+
+  // Legacy mode (no tsStr): return blob download
   res.download(outPng, 'detection.png', (err) => {
     cleanup();
     if (err && !res.headersSent) res.status(500).json({ error: 'Download failed' });
   });
+});
+
+// ─── Serve persisted processed files ─────────────────────────────────────────
+app.get('/api/processed/:tsStr/:filename', (req, res) => {
+  const tsStr    = req.params.tsStr;
+  const filename = req.params.filename;
+  if (!/^\d+$/.test(tsStr) || !/^[\w.\-]+$/.test(filename)) {
+    return res.status(400).json({ error: 'Invalid path parameters' });
+  }
+  const absPath = path.join(PROCESSED_ROOT, tsStr, filename);
+  if (!fs.existsSync(absPath)) {
+    return res.status(404).json({ error: 'Processed file not found' });
+  }
+  res.sendFile(absPath);
+});
+
+// ─── Artifact lookup endpoints ─────────────────────────────────────────────────
+app.get('/api/artifact', requireHistoryAuth, (req, res) => {
+  const tsStr = String(req.query.tsStr || '');
+  const proc  = sanitizeProcess(req.query.process);
+  if (!tsStr || !/^\d+$/.test(tsStr)) {
+    return res.status(400).json({ error: 'Invalid or missing tsStr' });
+  }
+  if (!proc) {
+    return res.status(400).json({ error: `Invalid process. Valid values: ${[...VALID_PROCESSES].join(', ')}` });
+  }
+  const artifact = getLatestArtifact(tsStr, proc);
+  if (!artifact) {
+    return res.status(404).json({ error: `No artifact found for tsStr=${tsStr}, process=${proc}` });
+  }
+  res.json(artifact);
+});
+
+app.get('/api/artifacts', requireHistoryAuth, (req, res) => {
+  const tsStr = String(req.query.tsStr || '');
+  if (!tsStr || !/^\d+$/.test(tsStr)) {
+    return res.status(400).json({ error: 'Invalid or missing tsStr' });
+  }
+  const artifacts = processedArtifacts.filter(r => r.tsStr === tsStr);
+  res.json({ tsStr, artifacts });
 });
 
 // ─── WebSocket server on /ws ───
@@ -294,14 +746,6 @@ wss.on('connection', (ws, req) => {
 
         // Send status
         sendStatus(ws);
-
-        // Send cached frames
-        for (const camId of ['cam1', 'cam2']) {
-          if (latestImages[camId]) {
-            const hdr = Buffer.from(`${camId}:`, 'utf-8');
-            ws.send(Buffer.concat([hdr, latestImages[camId]]));
-          }
-        }
         return;
       }
 
@@ -328,14 +772,16 @@ wss.on('connection', (ws, req) => {
     const timestamp = buf.readBigUInt64LE(8);
     const dataLen = buf.readUInt32LE(16);
     const jpegData = buf.subarray(24, 24+dataLen);
+    const tsStr = timestamp.toString();
 
     console.log(`Image ${camId}, ts=${timestamp}, dataLen =${dataLen}, size=${jpegData.length}`);
 
     latestImages[camId] = jpegData;
+    persistIncomingFrame(camId, tsStr, jpegData);
 
     // Build normalized frame: "camId:" + JPEG (consistent format for browsers)
     // Build normalized frame: "camId:timestamp:" + JPEG
-    const hdr = Buffer.from(`${camId}:${timestamp.toString()}:`, 'utf-8');
+    const hdr = Buffer.from(`${camId}:${tsStr}:`, 'utf-8');
     const browserFrame = Buffer.concat([hdr, jpegData]);
 
     // Relay to browsers
