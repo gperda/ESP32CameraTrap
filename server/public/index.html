@@ -290,6 +290,11 @@
     }
     .btn-depth:hover:not(:disabled) { background: #0d3050; }
     .btn-depth:disabled { opacity: 0.35; cursor: not-allowed; color: var(--muted); }
+    .btn-depth.has-output {
+      background: #145886;
+      border-color: #2f84b8;
+      color: #d2f5ff;
+    }
     .btn-undistort {
       margin-left: 4px;
       padding: 3px 9px;
@@ -304,6 +309,11 @@
     }
     .btn-undistort:hover:not(:disabled) { background: #0d2740; }
     .btn-undistort:disabled { opacity: 0.35; cursor: not-allowed; color: var(--muted); }
+    .btn-undistort.has-output {
+      background: #0d4865;
+      border-color: #3494bf;
+      color: #d3f4ff;
+    }
     .btn-detect {
       margin-left: 4px;
       padding: 3px 9px;
@@ -318,6 +328,30 @@
     }
     .btn-detect:hover:not(:disabled) { background: #0d2d1b; }
     .btn-detect:disabled { opacity: 0.35; cursor: not-allowed; color: var(--muted); }
+    .btn-detect.has-output {
+      background: #136137;
+      border-color: #2aa562;
+      color: #d6ffe7;
+    }
+    .btn-recompute {
+      margin-left: 2px;
+      padding: 3px 7px;
+      font-size: 0.72rem;
+      border-radius: 6px;
+      background: rgba(255,255,255,0.08);
+      color: #d6deea;
+      border: 1px solid rgba(255,255,255,0.22);
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background .15s, opacity .15s, color .15s;
+    }
+    .btn-recompute:hover:not(:disabled) { background: rgba(255,255,255,0.16); }
+    .btn-recompute:disabled { opacity: 0.35; cursor: not-allowed; color: var(--muted); }
+    .btn-recompute.has-output {
+      background: rgba(255,255,255,0.2);
+      color: #fff;
+      border-color: rgba(255,255,255,0.45);
+    }
 
     /* ── Measure tool ── */
     .depth-header-right {
@@ -614,11 +648,38 @@
       border-right: 1px solid var(--border);
     }
 
-    #depthCanvas {
+    .tof-matrix-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(220px, 1fr));
+      gap: 10px;
+      width: 100%;
+    }
+
+    .tof-matrix-card {
+      background: rgba(0,0,0,.22);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+    }
+
+    .tof-matrix-title {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: var(--tof-accent);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    #depthCanvas,
+    #motionCanvas,
+    #statusCanvas {
       display: block;
       image-rendering: pixelated;
-      width: 256px;
-      height: 256px;
+      width: 100%;
+      max-width: 256px;
+      aspect-ratio: 1;
+      height: auto;
       border: 1px solid var(--border);
       border-radius: 4px;
       box-shadow: 0 0 20px rgba(0,229,255,.05);
@@ -630,7 +691,7 @@
       border-color: var(--tof-alert);
     }
 
-    .depth-legend { width: 256px; }
+    .depth-legend { width: 100%; max-width: 256px; }
     .depth-legend-bar {
       height: 8px;
       border-radius: 2px;
@@ -720,6 +781,64 @@
       margin-top: auto;
     }
 
+    .tof-dump-list {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(0,0,0,.2);
+      overflow: hidden;
+    }
+
+    .tof-dump-list-title {
+      padding: 7px 10px;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      color: var(--tof-accent);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .tof-dump-list-body {
+      max-height: 180px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 8px;
+    }
+
+    .tof-dump-row {
+      border: 1px solid rgba(255,255,255,.06);
+      border-radius: 6px;
+      padding: 6px 8px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: #d3d9e5;
+      background: rgba(0,0,0,.16);
+    }
+
+    .tof-dump-row:hover {
+      background: rgba(255,255,255,.06);
+    }
+
+    .tof-dump-row.active {
+      border-color: var(--tof-accent);
+      color: #f2fbff;
+    }
+
+    .tof-dump-empty {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: var(--tof-dim);
+      padding: 4px;
+    }
+
     /* ── Tooltip ── */
     #tofTooltip {
       position: fixed;
@@ -739,8 +858,8 @@
     @media (max-width: 640px) {
       .tof-body { grid-template-columns: 1fr; }
       .tof-map-col { border-right: none; border-bottom: 1px solid var(--border); }
-      #depthCanvas, .depth-legend { width: 100%; }
-      #depthCanvas { height: auto; aspect-ratio: 1; }
+      .tof-matrix-grid { grid-template-columns: 1fr; }
+      #depthCanvas, #motionCanvas, #statusCanvas, .depth-legend { max-width: none; width: 100%; }
     }
   </style>
 </head>
@@ -858,7 +977,7 @@
 <div class="tof-section">
 
   <div class="tof-section-header">
-    <h2>⬡ VL53L5CX — Depth Matrix &nbsp;<span>(live only while ESP32 is awake)</span></h2>
+    <h2>⬡ VL53L5CX — ToF Matrices &nbsp;<span>(live only while ESP32 is awake)</span></h2>
     <div id="alertBadge">SLEEP</div>
   </div>
 
@@ -871,14 +990,43 @@
   <!-- Revealed on first frame -->
   <div class="tof-body" id="tofBody">
 
-    <!-- Left: heatmap + legend -->
+    <!-- Left: matrices + received JSON list -->
     <div class="tof-map-col">
-      <canvas id="depthCanvas" width="256" height="256"></canvas>
-      <div class="depth-legend">
-        <div class="depth-legend-bar"></div>
-        <div class="depth-legend-labels">
-          <span>0 mm</span><span>2000</span><span>4000+</span>
+      <div class="tof-matrix-grid">
+        <div class="tof-matrix-card">
+          <div class="tof-matrix-title">Distance</div>
+          <canvas id="depthCanvas" width="256" height="256"></canvas>
+          <div class="depth-legend">
+            <div class="depth-legend-bar"></div>
+            <div class="depth-legend-labels">
+              <span>0 mm</span><span>2000</span><span>4000+</span>
+            </div>
+          </div>
         </div>
+        <div class="tof-matrix-card">
+          <div class="tof-matrix-title">Motion</div>
+          <canvas id="motionCanvas" width="256" height="256"></canvas>
+          <div class="depth-legend">
+            <div class="depth-legend-bar"></div>
+            <div class="depth-legend-labels">
+              <span>0</span><span>128</span><span>255+</span>
+            </div>
+          </div>
+        </div>
+        <div class="tof-matrix-card">
+          <div class="tof-matrix-title">Status</div>
+          <canvas id="statusCanvas" width="256" height="256"></canvas>
+          <div class="depth-legend">
+            <div class="depth-legend-labels">
+              <span>5/9 = valid</span><span>other = invalid</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tof-dump-list">
+        <div class="tof-dump-list-title">Received ToF JSON files</div>
+        <div class="tof-dump-list-body" id="tofDumpList"></div>
       </div>
     </div>
 
@@ -915,6 +1063,20 @@
           <div class="tof-stat-label">Frames rx</div>
           <div class="tof-stat-value" id="statFrames">0</div>
           <div class="tof-stat-unit">this session</div>
+        </div>
+        <div class="tof-stat">
+          <div class="tof-stat-label">Motion zones</div>
+          <div class="tof-stat-value" id="statMotionZones">—</div>
+          <div class="tof-stat-unit">aggregate count</div>
+        </div>
+        <div class="tof-stat">
+          <div class="tof-stat-label">High motion</div>
+          <div class="tof-stat-value" id="statHighMotion">—</div>
+          <div class="tof-stat-unit">flag</div>
+        </div>
+        <div class="tof-stat wide">
+          <div class="tof-stat-label">Last file</div>
+          <div class="tof-stat-value small" id="statFileName">—</div>
         </div>
         <div class="tof-stat wide">
           <div class="tof-stat-label">Last reading</div>
@@ -957,6 +1119,7 @@ const HISTORY_TOKEN_STORAGE_KEY = 'historyApiToken';
 
 // Pair list state
 const pairMap     = new Map();   // tsStr → { cam1, cam2, rowEl, badge1El, badge2El }
+const TRACKED_PROCESSES = ['depthmap', 'undistort', 'detection'];
 const MAX_PAIRS   = 300;
 let   displayedTs = null;        // timestamp of the currently active pair row
 let   historyBootstrapped = false;
@@ -1099,6 +1262,7 @@ async function loadHistoryMetadata({ replace = true } = {}) {
       if (!item || typeof item.tsStr !== 'string') continue;
       if (item.cam1) addOrUpdatePairMetadata(item.tsStr, 'cam1', item.cam1);
       if (item.cam2) addOrUpdatePairMetadata(item.tsStr, 'cam2', item.cam2);
+      if (item.processOutputs) applyHistoryProcessOutputs(item.tsStr, item.processOutputs);
     }
 
     setHistoryStatus(`History: loaded ${items.length} metadata row(s)`);
@@ -1174,6 +1338,7 @@ function connect() {
 
       /* ── NEW: ToF frame injected by tof-serial.js ── */
       if (m.type === 'tof_frame') { processToFFrame(m); return; }
+      if (m.type === 'tofdump')   { processTofDump(m); return; }
 
       return;
     }
@@ -1288,12 +1453,32 @@ function ensurePairEntry(tsStr) {
     depthBtn.disabled    = true;
     depthBtn.addEventListener('click', e => { e.stopPropagation(); void requestStereoView(tsStr, 'depth'); });
 
+    const depthAgainBtn = document.createElement('button');
+    depthAgainBtn.className = 'btn-recompute';
+    depthAgainBtn.title = 'Compute depth again and overwrite cached output';
+    depthAgainBtn.textContent = '↻';
+    depthAgainBtn.disabled = true;
+    depthAgainBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      void requestStereoView(tsStr, 'depth', { forceRecompute: true });
+    });
+
     const undistortBtn = document.createElement('button');
     undistortBtn.className   = 'btn-undistort';
     undistortBtn.title       = 'Show rectified undistorted pair';
     undistortBtn.textContent = '◫ Undistort';
     undistortBtn.disabled    = true;
     undistortBtn.addEventListener('click', e => { e.stopPropagation(); void requestStereoView(tsStr, 'undistort'); });
+
+    const undistortAgainBtn = document.createElement('button');
+    undistortAgainBtn.className = 'btn-recompute';
+    undistortAgainBtn.title = 'Compute undistort again and overwrite cached output';
+    undistortAgainBtn.textContent = '↻';
+    undistortAgainBtn.disabled = true;
+    undistortAgainBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      void requestStereoView(tsStr, 'undistort', { forceRecompute: true });
+    });
 
     rowEl.appendChild(tsSpan);
     rowEl.appendChild(badge1El);
@@ -1306,10 +1491,23 @@ function ensurePairEntry(tsStr) {
     detectBtn.disabled    = true;
     detectBtn.addEventListener('click', e => { e.stopPropagation(); void requestDetection(tsStr); });
 
+    const detectAgainBtn = document.createElement('button');
+    detectAgainBtn.className = 'btn-recompute';
+    detectAgainBtn.title = 'Run detection again and overwrite cached output';
+    detectAgainBtn.textContent = '↻';
+    detectAgainBtn.disabled = true;
+    detectAgainBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      void requestDetection(tsStr, { forceRecompute: true });
+    });
+
     rowEl.appendChild(comboBtn);
     rowEl.appendChild(depthBtn);
+    rowEl.appendChild(depthAgainBtn);
     rowEl.appendChild(undistortBtn);
+    rowEl.appendChild(undistortAgainBtn);
     rowEl.appendChild(detectBtn);
+    rowEl.appendChild(detectAgainBtn);
     rowEl.addEventListener('click', () => { void showPair(tsStr); });
 
     $pairList.insertBefore(rowEl, $pairList.firstChild);
@@ -1322,8 +1520,11 @@ function ensurePairEntry(tsStr) {
       badge2El,
       comboBtn,
       depthBtn,
+      depthAgainBtn,
       undistortBtn,
+      undistortAgainBtn,
       detectBtn,
+      detectAgainBtn,
       latestByProcess: {},  // tsStr → process → artifact URL
     });
   }
@@ -1339,9 +1540,55 @@ function updatePairBadge(entry, camId, sizeKB) {
   if (entry.cam1 && entry.cam2) {
     if (entry.comboBtn) entry.comboBtn.disabled = false;
     if (entry.depthBtn) entry.depthBtn.disabled = false;
+    if (entry.depthAgainBtn) entry.depthAgainBtn.disabled = false;
     if (entry.undistortBtn) entry.undistortBtn.disabled = false;
+    if (entry.undistortAgainBtn) entry.undistortAgainBtn.disabled = false;
     if (entry.detectBtn) entry.detectBtn.disabled = false;
+    if (entry.detectAgainBtn) entry.detectAgainBtn.disabled = false;
   }
+
+  refreshProcessButtonStates(entry);
+}
+
+function refreshProcessButtonStates(entry) {
+  const hasDepth = !!entry?.latestByProcess?.depthmap;
+  const hasUndistort = !!entry?.latestByProcess?.undistort;
+  const hasDetect = !!entry?.latestByProcess?.detection;
+
+  if (entry.depthBtn) entry.depthBtn.classList.toggle('has-output', hasDepth);
+  if (entry.undistortBtn) entry.undistortBtn.classList.toggle('has-output', hasUndistort);
+  if (entry.detectBtn) entry.detectBtn.classList.toggle('has-output', hasDetect);
+
+  if (entry.depthAgainBtn) entry.depthAgainBtn.classList.toggle('has-output', hasDepth);
+  if (entry.undistortAgainBtn) entry.undistortAgainBtn.classList.toggle('has-output', hasUndistort);
+  if (entry.detectAgainBtn) entry.detectAgainBtn.classList.toggle('has-output', hasDetect);
+}
+
+function setProcessArtifactUrl(entry, processName, url) {
+  if (!entry) return;
+  if (!entry.latestByProcess || typeof entry.latestByProcess !== 'object') {
+    entry.latestByProcess = {};
+  }
+  if (typeof url === 'string' && url) entry.latestByProcess[processName] = url;
+  else delete entry.latestByProcess[processName];
+  refreshProcessButtonStates(entry);
+}
+
+function applyHistoryProcessOutputs(tsStr, processOutputs) {
+  const entry = ensurePairEntry(tsStr);
+  if (!processOutputs || typeof processOutputs !== 'object') {
+    refreshProcessButtonStates(entry);
+    return;
+  }
+
+  for (const proc of TRACKED_PROCESSES) {
+    const info = processOutputs[proc];
+    if (info && info.available && typeof info.url === 'string' && info.url) {
+      setProcessArtifactUrl(entry, proc, info.url);
+    }
+  }
+
+  refreshProcessButtonStates(entry);
 }
 
 function addOrUpdatePair(tsStr, camId, jpeg, frameNum, sizeKB) {
@@ -1354,6 +1601,7 @@ function addOrUpdatePair(tsStr, camId, jpeg, frameNum, sizeKB) {
     loadingPromise: null,
   };
   updatePairBadge(entry, camId, sizeKB);
+  refreshProcessButtonStates(entry);
 }
 
 function addOrUpdatePairMetadata(tsStr, camId, metadata) {
@@ -1370,6 +1618,7 @@ function addOrUpdatePairMetadata(tsStr, camId, metadata) {
     loadingPromise: null,
   };
   updatePairBadge(entry, camId, sizeKB);
+  refreshProcessButtonStates(entry);
 }
 
 async function ensureCameraBlobLoaded(tsStr, camId) {
@@ -1591,20 +1840,17 @@ async function downloadUndistortedPair(tsStr) {
   }
 }
 
-async function requestStereoView(tsStr, viewMode) {
+async function requestStereoView(tsStr, viewMode, { forceRecompute = false } = {}) {
   const entry = pairMap.get(tsStr);
   if (!entry || !entry.cam1 || !entry.cam2) return;
 
-  const ready = await ensurePairBlobs(tsStr, ['cam1', 'cam2']);
-  if (!ready) {
-    setHistoryStatus('History: could not load required pair images', true);
-    return;
-  }
-
   const mode = viewMode === 'undistort' ? 'undistort' : 'depth';
+  const processName = mode === 'depth' ? 'depthmap' : mode;
 
   const activeBtn  = mode === 'undistort' ? entry.undistortBtn : entry.depthBtn;
   const idleBtn    = mode === 'undistort' ? entry.depthBtn : entry.undistortBtn;
+  const activeAgainBtn = mode === 'undistort' ? entry.undistortAgainBtn : entry.depthAgainBtn;
+  const idleAgainBtn = mode === 'undistort' ? entry.depthAgainBtn : entry.undistortAgainBtn;
   const panel      = document.getElementById('depthPanel');
   const titleEl    = document.getElementById('depthPanelTitle');
   const statusEl   = document.getElementById('depthStatus');
@@ -1617,6 +1863,8 @@ async function requestStereoView(tsStr, viewMode) {
     activeBtn.textContent = mode === 'undistort' ? 'Working…' : 'Computing…';
   }
   if (idleBtn) idleBtn.disabled = true;
+  if (activeAgainBtn) activeAgainBtn.disabled = true;
+  if (idleAgainBtn) idleAgainBtn.disabled = true;
   panel.classList.add('visible');
   titleEl.textContent = mode === 'undistort' ? '◫ Undistorted Stereo Pair' : '⊡ Stereo Depth Map';
   statusEl.textContent = 'Sending images to server…';
@@ -1625,28 +1873,7 @@ async function requestStereoView(tsStr, viewMode) {
   dlLink.classList.remove('show');
   dlLink.onclick = null;
 
-  const fd = buildStereoFormData(entry, mode);
-  fd.append('tsStr', tsStr);
-
-  try {
-    statusEl.textContent = mode === 'undistort'
-      ? 'Rectifying and undistorting stereo pair…'
-      : 'Computing depth map (SGBM)…';
-    const res = await fetch('/api/depthmap', { method: 'POST', body: fd });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-      throw new Error(err.error || `HTTP ${res.status}`);
-    }
-
-    const data = await res.json();
-    const artifactUrl = data.url;
-
-    // Store in per-tsStr artifact state
-    const processName = mode === 'depth' ? 'depthmap' : mode;
-    entry.latestByProcess[processName] = artifactUrl;
-
-    // Revoke previous blob URL (if any) and display from server URL
+  const renderStereoResult = (artifactUrl, fromCache = false) => {
     if (depthBlobUrl) { URL.revokeObjectURL(depthBlobUrl); depthBlobUrl = null; }
 
     resultImg.onload = () => {
@@ -1671,29 +1898,79 @@ async function requestStereoView(tsStr, viewMode) {
     }
     dlLink.classList.add('show');
 
-    // ── Show / hide the Measure tool (undistort view only) ────────────────
     const $btnMeasure = document.getElementById('btnMeasure');
     if ($btnMeasure) {
       if (mode === 'undistort') {
         $btnMeasure.style.display = 'inline-block';
-        // Reset in-progress clicks for the new image; keep completed rows
         measureState.pendingCam1 = null;
         measureState.pendingCam2 = null;
-        measureState.currentTs   = tsStr;
+        measureState.currentTs = tsStr;
         if (measureState.active) {
           updateMeasureHint();
           drawMeasureOverlay();
         }
       } else {
         $btnMeasure.style.display = 'none';
-        // Turn off measure mode when leaving undistort view
         if (measureState.active) deactivateMeasureMode();
       }
     }
 
+    statusEl.textContent = fromCache
+      ? (mode === 'undistort' ? `Undistorted pair loaded from cache · pair ${tsStr}` : `Depth map loaded from cache · pair ${tsStr}`)
+      : (mode === 'undistort' ? `Undistorted pair ready · pair ${tsStr}` : `Depth map ready · pair ${tsStr}`);
+  };
+
+  if (!forceRecompute && entry.latestByProcess[processName]) {
+    renderStereoResult(entry.latestByProcess[processName], true);
+    if (entry.depthBtn) {
+      entry.depthBtn.disabled = false;
+      entry.depthBtn.textContent = '⊡ Depth';
+    }
+    if (entry.depthAgainBtn) entry.depthAgainBtn.disabled = false;
+    if (entry.undistortBtn) {
+      entry.undistortBtn.disabled = false;
+      entry.undistortBtn.textContent = '◫ Undistort';
+    }
+    if (entry.undistortAgainBtn) entry.undistortAgainBtn.disabled = false;
+    return;
+  }
+
+  const ready = await ensurePairBlobs(tsStr, ['cam1', 'cam2']);
+  if (!ready) {
+    setHistoryStatus('History: could not load required pair images', true);
+    if (entry.depthBtn) {
+      entry.depthBtn.disabled = false;
+      entry.depthBtn.textContent = '⊡ Depth';
+    }
+    if (entry.depthAgainBtn) entry.depthAgainBtn.disabled = false;
+    if (entry.undistortBtn) {
+      entry.undistortBtn.disabled = false;
+      entry.undistortBtn.textContent = '◫ Undistort';
+    }
+    if (entry.undistortAgainBtn) entry.undistortAgainBtn.disabled = false;
+    return;
+  }
+
+  const fd = buildStereoFormData(entry, mode);
+  fd.append('tsStr', tsStr);
+  fd.append('forceRecompute', forceRecompute ? 'true' : 'false');
+
+  try {
     statusEl.textContent = mode === 'undistort'
-      ? `Undistorted pair ready · pair ${tsStr}`
-      : `Depth map ready · pair ${tsStr}`;
+      ? 'Rectifying and undistorting stereo pair…'
+      : 'Computing depth map (SGBM)…';
+    const res = await fetch('/api/depthmap', { method: 'POST', body: fd });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    const artifactUrl = data.url;
+
+    setProcessArtifactUrl(entry, processName, artifactUrl);
+    renderStereoResult(artifactUrl, !!data.cached);
 
   } catch (e) {
     statusEl.textContent = 'Error: ' + e.message;
@@ -1703,14 +1980,16 @@ async function requestStereoView(tsStr, viewMode) {
       entry.depthBtn.disabled = false;
       entry.depthBtn.textContent = '⊡ Depth';
     }
+    if (entry.depthAgainBtn) entry.depthAgainBtn.disabled = false;
     if (entry.undistortBtn) {
       entry.undistortBtn.disabled = false;
       entry.undistortBtn.textContent = '◫ Undistort';
     }
+    if (entry.undistortAgainBtn) entry.undistortAgainBtn.disabled = false;
   }
 }
 
-async function requestDetection(tsStr) {
+async function requestDetection(tsStr, { forceRecompute = false } = {}) {
   const entry = pairMap.get(tsStr);
   if (!entry) return;
 
@@ -1724,6 +2003,7 @@ async function requestDetection(tsStr) {
     entry.detectBtn.disabled = true;
     entry.detectBtn.textContent = 'Scanning…';
   }
+  if (entry.detectAgainBtn) entry.detectAgainBtn.disabled = true;
   panel.classList.add('visible');
   titleEl.textContent = '⊙ MegaDetector Result';
   statusEl.className   = 'depth-status';
@@ -1736,6 +2016,29 @@ async function requestDetection(tsStr) {
 
   const fd = new FormData();
   fd.append('tsStr', tsStr);
+  fd.append('forceRecompute', forceRecompute ? 'true' : 'false');
+
+  if (!forceRecompute && entry.latestByProcess && entry.latestByProcess.detection) {
+    const artifactUrl = entry.latestByProcess.detection;
+    if (depthBlobUrl) { URL.revokeObjectURL(depthBlobUrl); depthBlobUrl = null; }
+
+    resultImg.src = artifactUrl;
+    resultImg.classList.add('show');
+
+    dlLink.onclick = null;
+    dlLink.href = artifactUrl;
+    dlLink.download = `${tsStr}_detection.png`;
+    dlLink.textContent = '⬇ Save Detection';
+    dlLink.classList.add('show');
+
+    statusEl.textContent = `Detection loaded from cache · pair ${tsStr}`;
+    if (entry.detectBtn) {
+      entry.detectBtn.disabled = false;
+      entry.detectBtn.textContent = '⊙ Detect';
+    }
+    if (entry.detectAgainBtn) entry.detectAgainBtn.disabled = false;
+    return;
+  }
 
   // Chain from depthmap artifact if available; otherwise upload cam1 directly
   if (entry.latestByProcess && entry.latestByProcess.depthmap) {
@@ -1744,12 +2047,14 @@ async function requestDetection(tsStr) {
   } else {
     if (!entry.cam1) {
       if (entry.detectBtn) { entry.detectBtn.disabled = false; entry.detectBtn.textContent = '⊙ Detect'; }
+      if (entry.detectAgainBtn) entry.detectAgainBtn.disabled = false;
       return;
     }
     const ready = await ensurePairBlobs(tsStr, ['cam1']);
     if (!ready) {
       setHistoryStatus('History: could not load cam1 image', true);
       if (entry.detectBtn) { entry.detectBtn.disabled = false; entry.detectBtn.textContent = '⊙ Detect'; }
+      if (entry.detectAgainBtn) entry.detectAgainBtn.disabled = false;
       return;
     }
     fd.append('cam1', entry.cam1.blob, 'cam1.jpg');
@@ -1766,7 +2071,7 @@ async function requestDetection(tsStr) {
 
     const data = await res.json();
     const artifactUrl = data.url;
-    entry.latestByProcess.detection = artifactUrl;
+    setProcessArtifactUrl(entry, 'detection', artifactUrl);
 
     if (depthBlobUrl) { URL.revokeObjectURL(depthBlobUrl); depthBlobUrl = null; }
 
@@ -1779,7 +2084,9 @@ async function requestDetection(tsStr) {
     dlLink.textContent = '⬇ Save Detection';
     dlLink.classList.add('show');
 
-    statusEl.textContent = `Detection complete · pair ${tsStr}`;
+    statusEl.textContent = data.cached
+      ? `Detection loaded from cache · pair ${tsStr}`
+      : `Detection complete · pair ${tsStr}`;
 
   } catch (e) {
     statusEl.textContent = 'Error: ' + e.message;
@@ -1789,6 +2096,7 @@ async function requestDetection(tsStr) {
       entry.detectBtn.disabled = false;
       entry.detectBtn.textContent = '⊙ Detect';
     }
+    if (entry.detectAgainBtn) entry.detectAgainBtn.disabled = false;
   }
 }
 
@@ -2206,74 +2514,260 @@ function depthToColor(mm) {
   ];
 }
 
+function motionToColor(v) {
+  const mmLike = Math.min(4000, Math.max(0, Number(v || 0) * 16));
+  return depthToColor(mmLike);
+}
+
+function statusToColor(v) {
+  if (v === 5 || v === 9) return [28, 170, 82];
+  if (v === 255) return [90, 94, 110];
+  return [160, 70, 70];
+}
+
+function isValidStatus(v) {
+  return v === 5 || v === 9;
+}
+
+function getZoneSide(values) {
+  if (!Array.isArray(values)) return 0;
+  const n = Math.sqrt(values.length);
+  return Number.isInteger(n) ? n : 0;
+}
+
+function basename(pathText) {
+  const idx = String(pathText || '').lastIndexOf('/');
+  return idx >= 0 ? String(pathText).slice(idx + 1) : String(pathText || '');
+}
+
 // ── Canvas refs ───────────────────────────────────────────────────────────────
 const depthCanvas = document.getElementById('depthCanvas');
 const depthCtx    = depthCanvas.getContext('2d');
-const ZONES = 8;
-const CELL  = depthCanvas.width / ZONES;   // 32 px per zone at 256×256
+const motionCanvas = document.getElementById('motionCanvas');
+const motionCtx    = motionCanvas.getContext('2d');
+const statusCanvas = document.getElementById('statusCanvas');
+const statusCtx    = statusCanvas.getContext('2d');
 
 const sparkCanvas = document.getElementById('sparkCanvas');
 const sparkCtx    = sparkCanvas.getContext('2d');
+const tofDumpList = document.getElementById('tofDumpList');
 
 // ── ToF state ─────────────────────────────────────────────────────────────────
 const sparkData   = [];
+const tofDumpEntries = [];
+const MAX_TOF_DUMP_ROWS = 80;
+let selectedTofDumpId = null;
 let tofFrameCount = 0;
 let lastDistances = [];
 let lastStatuses  = [];
+let lastZoneSide  = 0;
+let nextTofDumpId = 1;
 
-// ── Draw 8×8 heatmap ─────────────────────────────────────────────────────────
-function drawDepth(distances, statuses, alert) {
-  const imgData = depthCtx.createImageData(depthCanvas.width, depthCanvas.height);
-  const d       = imgData.data;
+function computeTofStats(distances, statuses) {
+  if (!Array.isArray(distances) || !distances.length) {
+    return { min: null, max: null, mean: null, validZones: 0, closeZones: 0 };
+  }
 
-  for (let row = 0; row < ZONES; row++) {
-    for (let col = 0; col < ZONES; col++) {
-      const idx   = row * ZONES + col;
-      const valid =(statuses[idx] === 5 || statuses[idx] === 9);
-      const [r, g, b] = /*valid ? */depthToColor(distances[idx]); // : [20, 28, 42];
+  const valid = [];
+  const close = [];
+  for (let i = 0; i < distances.length; i++) {
+    const d = Number(distances[i]);
+    if (!Number.isFinite(d)) continue;
+    if (!isValidStatus(statuses[i])) continue;
+    valid.push(d);
+    if (d < 500) close.push(d);
+  }
 
-      const ox = col * CELL, oy = row * CELL;
-      for (let dy = 0; dy < CELL; dy++) {
-        for (let dx = 0; dx < CELL; dx++) {
-          const p = ((oy + dy) * depthCanvas.width + (ox + dx)) * 4;
-          d[p] = r; d[p+1] = g; d[p+2] = b; d[p+3] = 255;
+  if (!valid.length) return { min: null, max: null, mean: null, validZones: 0, closeZones: 0 };
+  const sum = valid.reduce((acc, v) => acc + v, 0);
+  return {
+    min: Math.min(...valid),
+    max: Math.max(...valid),
+    mean: Math.round(sum / valid.length),
+    validZones: valid.length,
+    closeZones: close.length,
+  };
+}
+
+function drawMatrix(canvas, ctx, values, zoneSide, colorFn, labelFn) {
+  const cell = canvas.width / zoneSide;
+  const imgData = ctx.createImageData(canvas.width, canvas.height);
+  const d = imgData.data;
+
+  for (let row = 0; row < zoneSide; row++) {
+    for (let col = 0; col < zoneSide; col++) {
+      const idx = row * zoneSide + col;
+      const [r, g, b] = colorFn(values[idx], idx);
+      const ox = col * cell;
+      const oy = row * cell;
+
+      for (let dy = 0; dy < cell; dy++) {
+        for (let dx = 0; dx < cell; dx++) {
+          const p = ((oy + dy) * canvas.width + (ox + dx)) * 4;
+          d[p] = r;
+          d[p + 1] = g;
+          d[p + 2] = b;
+          d[p + 3] = 255;
         }
       }
     }
   }
-  depthCtx.putImageData(imgData, 0, 0);
 
-  // Overlay status code for each zone
-  depthCtx.font = '600 12px "Share Tech Mono", ui-monospace, monospace';
-  depthCtx.textAlign = 'center';
-  depthCtx.textBaseline = 'middle';
-  for (let row = 0; row < ZONES; row++) {
-    for (let col = 0; col < ZONES; col++) {
-      const idx = row * ZONES + col;
-      const x = col * CELL + CELL * 0.5;
-      const y = row * CELL + CELL * 0.5;
-      const label = String(distances[idx] ?? '-');// + " " + String(distances[idx] ?? '-');
+  ctx.putImageData(imgData, 0, 0);
 
-      depthCtx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
-      depthCtx.lineWidth = 3;
-      depthCtx.strokeText(label, x, y);
+  const fontPx = Math.max(10, Math.round(cell * 0.32));
+  ctx.font = `600 ${fontPx}px "Share Tech Mono", ui-monospace, monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
 
-      depthCtx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-      depthCtx.fillText(label, x, y);
+  for (let row = 0; row < zoneSide; row++) {
+    for (let col = 0; col < zoneSide; col++) {
+      const idx = row * zoneSide + col;
+      const x = col * cell + cell * 0.5;
+      const y = row * cell + cell * 0.5;
+      const label = labelFn(values[idx], idx);
+
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+      ctx.lineWidth = 3;
+      ctx.strokeText(label, x, y);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+      ctx.fillText(label, x, y);
     }
   }
 
-  // Subtle grid
-  depthCtx.strokeStyle = 'rgba(255,255,255,0.07)';
-  depthCtx.lineWidth   = 1;
-  for (let i = 1; i < ZONES; i++) {
-    depthCtx.beginPath();
-    depthCtx.moveTo(i*CELL, 0);              depthCtx.lineTo(i*CELL, depthCanvas.height); depthCtx.stroke();
-    depthCtx.beginPath();
-    depthCtx.moveTo(0,      i*CELL);         depthCtx.lineTo(depthCanvas.width, i*CELL);  depthCtx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+  ctx.lineWidth = 1;
+  for (let i = 1; i < zoneSide; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * cell, 0);
+    ctx.lineTo(i * cell, canvas.height);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, i * cell);
+    ctx.lineTo(canvas.width, i * cell);
+    ctx.stroke();
+  }
+}
+
+function renderDumpList() {
+  if (!tofDumpList) return;
+  tofDumpList.innerHTML = '';
+
+  if (!tofDumpEntries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'tof-dump-empty';
+    empty.textContent = 'No JSON dump received yet';
+    tofDumpList.appendChild(empty);
+    return;
   }
 
-  depthCanvas.classList.toggle('alert-glow', alert);
+  for (const entry of tofDumpEntries) {
+    const row = document.createElement('div');
+    row.className = 'tof-dump-row';
+    if (entry.id === selectedTofDumpId) row.classList.add('active');
+
+    const left = document.createElement('span');
+    left.textContent = basename(entry.filename || 'unknown.json');
+    const right = document.createElement('span');
+    right.textContent = new Date(entry.ts).toLocaleTimeString();
+
+    row.appendChild(left);
+    row.appendChild(right);
+    row.addEventListener('click', () => {
+      selectedTofDumpId = entry.id;
+      renderDumpList();
+      renderTofPayload(entry.payload, {
+        filename: entry.filename,
+        ts: entry.ts,
+      });
+    });
+    tofDumpList.appendChild(row);
+  }
+}
+
+function revealTofBody() {
+  const overlay = document.getElementById('tofSleepOverlay');
+  const body = document.getElementById('tofBody');
+  if (overlay.style.display !== 'none') {
+    overlay.style.display = 'none';
+    body.classList.add('visible');
+  }
+}
+
+function renderTofPayload(payload, meta = {}) {
+  const distances = Array.isArray(payload?.distances) ? payload.distances.map(v => Number(v) || 0) : [];
+  const motion = Array.isArray(payload?.motion) ? payload.motion.map(v => Number(v) || 0) : [];
+  const status = Array.isArray(payload?.status) ? payload.status.map(v => Number(v) || 0) : [];
+  const zoneSide = getZoneSide(distances) || getZoneSide(status) || getZoneSide(motion);
+  if (!zoneSide) return;
+
+  const count = zoneSide * zoneSide;
+  const normalizedDist = distances.slice(0, count);
+  const normalizedMotion = motion.length ? motion.slice(0, count) : new Array(count).fill(0);
+  const normalizedStatus = status.length ? status.slice(0, count) : new Array(count).fill(5);
+
+  revealTofBody();
+
+  drawMatrix(depthCanvas, depthCtx, normalizedDist, zoneSide, (v) => depthToColor(Number(v) || 0), (v) => String(Number(v) || 0));
+  drawMatrix(motionCanvas, motionCtx, normalizedMotion, zoneSide, (v) => motionToColor(Number(v) || 0), (v) => String(Number(v) || 0));
+  drawMatrix(statusCanvas, statusCtx, normalizedStatus, zoneSide, (v) => statusToColor(Number(v) || 0), (v) => String(Number(v) || 0));
+
+  const stats = computeTofStats(normalizedDist, normalizedStatus);
+  const motionZonesRaw = payload?.motionZones;
+  const motionZonesText = Array.isArray(motionZonesRaw)
+    ? String(motionZonesRaw[0] ?? motionZonesRaw.length)
+    : (motionZonesRaw == null ? '—' : String(motionZonesRaw));
+  const highMotion = !!payload?.highMotion;
+
+  document.getElementById('statMin').textContent = stats.min ?? '—';
+  document.getElementById('statMax').textContent = stats.max ?? '—';
+  document.getElementById('statMean').textContent = stats.mean ?? '—';
+  document.getElementById('statValid').textContent = stats.validZones ?? '—';
+  document.getElementById('statClose').textContent = stats.closeZones ?? '—';
+  document.getElementById('statMotionZones').textContent = motionZonesText;
+  document.getElementById('statHighMotion').textContent = highMotion ? 'YES' : 'NO';
+  document.getElementById('statFileName').textContent = meta.filename || '(live)';
+  document.getElementById('statTs').textContent =
+    meta.ts ? new Date(meta.ts).toISOString().slice(11, 23) : '—';
+
+  tofFrameCount++;
+  document.getElementById('statFrames').textContent = tofFrameCount;
+
+  if (stats.min != null) drawSpark(stats.min);
+
+  const badge = document.getElementById('alertBadge');
+  const shouldAlert = highMotion || stats.closeZones > 0;
+  if (shouldAlert) {
+    badge.textContent = highMotion ? 'HIGH MOTION' : '⚠ PROXIMITY';
+    badge.classList.add('active');
+  } else {
+    badge.textContent = 'CLEAR';
+    badge.classList.remove('active');
+  }
+
+  lastDistances = normalizedDist;
+  lastStatuses = normalizedStatus;
+  lastZoneSide = zoneSide;
+  depthCanvas.classList.toggle('alert-glow', shouldAlert);
+}
+
+function processTofDump(obj) {
+  if (!obj || typeof obj !== 'object' || !obj.payload || typeof obj.payload !== 'object') return;
+  const entry = {
+    id: nextTofDumpId++,
+    filename: obj.filename || 'unknown.json',
+    payload: obj.payload,
+    ts: Number(obj.ts) || Date.now(),
+  };
+
+  tofDumpEntries.unshift(entry);
+  if (tofDumpEntries.length > MAX_TOF_DUMP_ROWS) tofDumpEntries.length = MAX_TOF_DUMP_ROWS;
+  selectedTofDumpId = entry.id;
+  renderDumpList();
+  renderTofPayload(entry.payload, {
+    filename: entry.filename,
+    ts: entry.ts,
+  });
 }
 
 // ── Draw rolling sparkline ────────────────────────────────────────────────────
@@ -2322,80 +2816,67 @@ function drawSpark(minVal) {
 
 // ── Process one tof_frame message ────────────────────────────────────────────
 function processToFFrame(obj) {
-  if (!Array.isArray(obj.distances) || obj.distances.length !== 64) return;
-
-  const dist  = obj.distances;
-  const stat  = Array.isArray(obj.status) ? obj.status : new Array(64).fill(5);
-  const alert = !!obj.proximity_alert;
-  const s     = obj.stats || {};
-
-  lastDistances = dist;
-  lastStatuses  = stat;
-
-  // Reveal the panel on first frame, hide the sleep overlay
-  const overlay = document.getElementById('tofSleepOverlay');
-  const body    = document.getElementById('tofBody');
-  if (overlay.style.display !== 'none') {
-    overlay.style.display = 'none';
-    body.classList.add('visible');
-  }
-
-  drawDepth(dist, stat, alert);
-
-  document.getElementById('statMin').textContent   = s.min   ?? '—';
-  document.getElementById('statMax').textContent   = s.max   ?? '—';
-  document.getElementById('statMean').textContent  = s.mean  ?? '—';
-  document.getElementById('statValid').textContent = s.validZones ?? '—';
-  document.getElementById('statClose').textContent = s.closeZones ?? '—';
-  document.getElementById('statTs').textContent    =
-    obj.ts ? new Date(obj.ts).toISOString().slice(11, 23) : '—';
-
-  tofFrameCount++;
-  document.getElementById('statFrames').textContent = tofFrameCount;
+  if (!obj || !Array.isArray(obj.distances)) return;
+  renderTofPayload(
+    {
+      distances: obj.distances,
+      motion: Array.isArray(obj.motion) ? obj.motion : [],
+      status: Array.isArray(obj.status) ? obj.status : [],
+      motionZones: Array.isArray(obj.motionZones) ? obj.motionZones : [],
+      highMotion: !!obj.proximity_alert,
+    },
+    {
+      filename: '(live tof_frame)',
+      ts: Number(obj.ts) || Date.now(),
+    }
+  );
 
   if (obj.v) document.getElementById('tofVersion').textContent = `firmware v${obj.v}`;
-
-  if (s.min != null) drawSpark(s.min);
-
-  // Alert badge
-  const badge = document.getElementById('alertBadge');
-  if (alert) { badge.textContent = '⚠ PROXIMITY'; badge.classList.add('active'); }
-  else        { badge.textContent = 'CLEAR';        badge.classList.remove('active'); }
 }
 
 // ── Hover tooltip ─────────────────────────────────────────────────────────────
 const tofTooltip = document.getElementById('tofTooltip');
 
 depthCanvas.addEventListener('mousemove', (e) => {
-  if (!lastDistances.length) return;
+  if (!lastDistances.length || !lastZoneSide) return;
   const rect = depthCanvas.getBoundingClientRect();
-  const col  = Math.floor((e.clientX - rect.left)  / rect.width  * ZONES);
-  const row  = Math.floor((e.clientY - rect.top)   / rect.height * ZONES);
-  if (col < 0 || col >= ZONES || row < 0 || row >= ZONES) return;
+  const col  = Math.floor((e.clientX - rect.left)  / rect.width  * lastZoneSide);
+  const row  = Math.floor((e.clientY - rect.top)   / rect.height * lastZoneSide);
+  if (col < 0 || col >= lastZoneSide || row < 0 || row >= lastZoneSide) return;
 
-  const idx = row * ZONES + col;
+  const idx = row * lastZoneSide + col;
   const d   = lastDistances[idx];
   const s   = lastStatuses[idx];
   tofTooltip.style.display = 'block';
   tofTooltip.style.left    = (e.clientX + 14) + 'px';
   tofTooltip.style.top     = (e.clientY + 14) + 'px';
-  tofTooltip.textContent   = /*s === 5 ? */`[${row},${col}]  ${d} mm`; //: `[${row},${col}]  invalid (status ${s})`;
+  tofTooltip.textContent   = `[${row},${col}] ${d} mm · status ${s}`;
 });
 depthCanvas.addEventListener('mouseleave', () => { tofTooltip.style.display = 'none'; });
 
 // ── Draw blank grid on page load ──────────────────────────────────────────────
-(function initBlankGrid() {
-  depthCtx.fillStyle   = '#080c14';
-  depthCtx.fillRect(0, 0, depthCanvas.width, depthCanvas.height);
-  depthCtx.strokeStyle = 'rgba(255,255,255,0.04)';
-  depthCtx.lineWidth   = 1;
-  for (let i = 1; i < ZONES; i++) {
-    depthCtx.beginPath();
-    depthCtx.moveTo(i*CELL, 0); depthCtx.lineTo(i*CELL, depthCanvas.height); depthCtx.stroke();
-    depthCtx.beginPath();
-    depthCtx.moveTo(0, i*CELL); depthCtx.lineTo(depthCanvas.width, i*CELL);  depthCtx.stroke();
+function drawBlankGrid(canvas, ctx, zoneSide = 4) {
+  const cell = canvas.width / zoneSide;
+  ctx.fillStyle = '#080c14';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.lineWidth = 1;
+  for (let i = 1; i < zoneSide; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * cell, 0);
+    ctx.lineTo(i * cell, canvas.height);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, i * cell);
+    ctx.lineTo(canvas.width, i * cell);
+    ctx.stroke();
   }
-}());
+}
+
+drawBlankGrid(depthCanvas, depthCtx, 4);
+drawBlankGrid(motionCanvas, motionCtx, 4);
+drawBlankGrid(statusCanvas, statusCtx, 4);
+renderDumpList();
 </script>
 </body>
 </html>

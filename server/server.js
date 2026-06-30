@@ -33,7 +33,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 const upload     = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const DEPTHMAP_PY      = path.join(__dirname, 'depthmap.py');
 const TRIANGULATION_PY = path.join(__dirname, 'triangulation.py');
-const DETECTION_PY     = path.join(__dirname, 'detection.py');
+const DETECTION_PY     = path.join(__dirname, 'detection_segmentation.py');
 const CALIB_JSON       = path.join(__dirname, 'calibration.json');
 const FRAME_ROOT       = path.join(DATA_ROOT, 'frames');
 const FRAME_INDEX_FILE = path.join(DATA_ROOT, 'frame_index.ndjson');
@@ -46,6 +46,7 @@ const HISTORY_MAX_LIMIT = 2000;
 const VALID_PROCESSES = new Set([
   'undistort', 'undistort_cam1', 'undistort_cam2', 'depthmap', 'detection', 'segmentation',
 ]);
+const HISTORY_PROCESS_BUTTONS = ['depthmap', 'undistort', 'detection'];
 
 const persistedFrames = [];
 
@@ -73,6 +74,30 @@ function parseTimestampMs(tsStr) {
   if (tsStr.length === 13) return n;
   if (tsStr.length === 10) return n * 1000;
   return n;
+}
+
+function parseJsonFromStdout(stdoutText) {
+  const text = String(stdoutText || '').trim();
+  if (!text) return null;
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Some Python tools print extra logs; use the last valid JSON line.
+    const lines = text.split(/\r?\n/);
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      if (!line.startsWith('{') && !line.startsWith('[')) continue;
+      try {
+        return JSON.parse(line);
+      } catch {
+        // Keep scanning older lines.
+      }
+    }
+  }
+
+  return null;
 }
 
 function ensurePersistenceStorage() {
@@ -164,6 +189,19 @@ function buildArtifactFileName(tsStr, proc, ext) {
   return `${tsStr}_${proc}.${ext}`;
 }
 
+function parseForceFlag(value) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value === 1;
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+function makeProcessedArtifactUrl(tsStr, process, ext) {
+  const fileName = buildArtifactFileName(tsStr, process, ext || 'png');
+  return `/api/processed/${encodeURIComponent(tsStr)}/${encodeURIComponent(fileName)}`;
+}
+
 const processedArtifacts = [];
 
 function ensureProcessedStorage() {
@@ -241,7 +279,6 @@ app.get('/api/history', requireHistoryAuth, (req, res) => {
   const groupedByTs = new Map();
   for (let i = persistedFrames.length - 1; i >= 0; i -= 1) {
     const entry = persistedFrames[i];
-    console.log(entry);
     if (!entry || !Number.isFinite(entry.tsMs)) continue;
     if (startMs !== null && entry.tsMs < startMs) continue;
     if (endMs !== null && entry.tsMs > endMs) continue;
@@ -267,6 +304,38 @@ app.get('/api/history', requireHistoryAuth, (req, res) => {
   }
 
   const rows = Array.from(groupedByTs.values()).sort((a, b) => b.tsMs - a.tsMs);
+  const tsSet = new Set(rows.map(r => r.tsStr));
+  const processByTs = new Map();
+
+  for (let i = processedArtifacts.length - 1; i >= 0; i -= 1) {
+    const record = processedArtifacts[i];
+    if (!record || !tsSet.has(record.tsStr)) continue;
+    if (!HISTORY_PROCESS_BUTTONS.includes(record.process)) continue;
+
+    if (!processByTs.has(record.tsStr)) processByTs.set(record.tsStr, {});
+    const rowProcess = processByTs.get(record.tsStr);
+    if (rowProcess[record.process]) continue;
+
+    rowProcess[record.process] = {
+      available: true,
+      url: makeProcessedArtifactUrl(record.tsStr, record.process, record.ext),
+      createdAtMs: Number.isFinite(record.createdAtMs) ? record.createdAtMs : null,
+    };
+  }
+
+  for (const row of rows) {
+    const processOutputs = {};
+    const existing = processByTs.get(row.tsStr) || {};
+    for (const processName of HISTORY_PROCESS_BUTTONS) {
+      processOutputs[processName] = existing[processName] || {
+        available: false,
+        url: null,
+        createdAtMs: null,
+      };
+    }
+    row.processOutputs = processOutputs;
+  }
+
   const paged = rows.slice(offset, offset + limit);
 
   res.json({
@@ -317,8 +386,25 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
   }
 
   const tsStr = typeof req.body?.tsStr === 'string' ? req.body.tsStr.trim() : null;
+  const forceRecompute = parseForceFlag(req.body?.forceRecompute);
   if (tsStr !== null && !/^\d+$/.test(tsStr)) {
     return res.status(400).json({ error: 'Invalid tsStr format: must be numeric' });
+  }
+
+  const requestedProcessName = requestedMode === 'depth' ? 'depthmap' : requestedMode;
+  if (tsStr && !forceRecompute) {
+    const existing = getLatestArtifact(tsStr, requestedProcessName);
+    if (existing && existing.absPath && fs.existsSync(existing.absPath)) {
+      return res.json({
+        success: true,
+        cached: true,
+        tsStr,
+        process: requestedProcessName,
+        url: makeProcessedArtifactUrl(tsStr, requestedProcessName, existing.ext),
+        relPath: existing.relPath,
+        calibrated: !!(existing.metadata && existing.metadata.calibrated),
+      });
+    }
   }
 
   // Determine input buffers
@@ -351,13 +437,24 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
   const tmpDir  = os.tmpdir();
   const img1    = path.join(tmpDir, `${id}_cam1.jpg`);
   const img2    = path.join(tmpDir, `${id}_cam2.jpg`);
-  const outPng  = path.join(tmpDir, `${id}_depth.png`);
+  const outPng  = tsStr
+    ? path.join(PROCESSED_ROOT, tsStr, buildArtifactFileName(tsStr, requestedProcessName, 'png'))
+    : path.join(tmpDir, `${id}_depth.png`);
 
   const cleanup = () => {
-    for (const f of [img1, img2, outPng]) {
+    const tempFiles = [img1, img2];
+    if (!tsStr) tempFiles.push(outPng);
+    for (const f of tempFiles) {
       try { fs.unlinkSync(f); } catch { /* already gone */ }
     }
   };
+
+  if (tsStr) {
+    try { fs.mkdirSync(path.dirname(outPng), { recursive: true }); }
+    catch (e) {
+      return res.status(500).json({ error: 'Failed to create output dir: ' + e.message });
+    }
+  }
 
   try {
     fs.writeFileSync(img1, cam1Buffer);
@@ -378,11 +475,13 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
     return res.status(500).json({ error: 'Failed to spawn python3: ' + result.error.message });
   }
 
-  let pyOut = {};
-  try { pyOut = JSON.parse((result.stdout || '').trim()); } catch { /* ignore */ }
+  const pyOut = parseJsonFromStdout(result.stdout) || {};
 
   if (result.status !== 0 || !pyOut.success) {
     cleanup();
+    if (tsStr) {
+      try { fs.unlinkSync(outPng); } catch { /* ignore partial output */ }
+    }
     const errMsg = pyOut.error || result.stderr || 'depthmap.py failed';
     console.error('[depthmap]', errMsg);
     return res.status(500).json({ error: errMsg });
@@ -393,18 +492,13 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
 
   if (tsStr) {
     // Persist output with tsStr-based naming
-    const processName = outputMode === 'depth' ? 'depthmap' : outputMode;
-    const tsDir = path.join(PROCESSED_ROOT, tsStr);
-    try { fs.mkdirSync(tsDir, { recursive: true }); } catch (e) {
-      cleanup();
-      return res.status(500).json({ error: 'Failed to create output dir: ' + e.message });
-    }
+    const processName = requestedProcessName;
     const outFileName = buildArtifactFileName(tsStr, processName, 'png');
-    const persistedAbsPath = path.join(tsDir, outFileName);
+    const persistedAbsPath = outPng;
     const relPath = path.relative(__dirname, persistedAbsPath).split(path.sep).join('/');
-    try { fs.copyFileSync(outPng, persistedAbsPath); } catch (e) {
+    if (!fs.existsSync(persistedAbsPath)) {
       cleanup();
-      return res.status(500).json({ error: 'Failed to persist output: ' + e.message });
+      return res.status(500).json({ error: 'Expected output file missing after processing' });
     }
 
     const record = {
@@ -423,6 +517,7 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
 
     return res.json({
       success: true,
+      cached: false,
       tsStr,
       process: processName,
       url: `/api/processed/${encodeURIComponent(tsStr)}/${encodeURIComponent(outFileName)}`,
@@ -476,8 +571,7 @@ app.post('/api/triangulate', express.json({ limit: '4kb' }), (req, res) => {
     return res.status(500).json({ error: 'Failed to spawn python3: ' + result.error.message });
   }
 
-  let pyOut = {};
-  try { pyOut = JSON.parse((result.stdout || '').trim()); } catch { /* ignore */ }
+  const pyOut = parseJsonFromStdout(result.stdout) || {};
 
   if (result.status !== 0 || !pyOut.success) {
     const errMsg = pyOut.error || result.stderr || 'triangulation.py failed';
@@ -494,8 +588,24 @@ app.post('/api/detect', upload.fields([{ name: 'cam1', maxCount: 1 }]), (req, re
   const files = req.files;
 
   const tsStr = typeof req.body?.tsStr === 'string' ? req.body.tsStr.trim() : null;
+  const forceRecompute = parseForceFlag(req.body?.forceRecompute);
   if (tsStr !== null && !/^\d+$/.test(tsStr)) {
     return res.status(400).json({ error: 'Invalid tsStr format: must be numeric' });
+  }
+
+  if (tsStr && !forceRecompute) {
+    const existing = getLatestArtifact(tsStr, 'detection');
+    if (existing && existing.absPath && fs.existsSync(existing.absPath)) {
+      return res.json({
+        success: true,
+        cached: true,
+        tsStr,
+        process: 'detection',
+        url: makeProcessedArtifactUrl(tsStr, 'detection', existing.ext),
+        relPath: existing.relPath,
+        detections: Number(existing.metadata?.detections || 0),
+      });
+    }
   }
 
   const requestedSource = typeof req.body?.sourceProcess === 'string'
@@ -530,13 +640,24 @@ app.post('/api/detect', upload.fields([{ name: 'cam1', maxCount: 1 }]), (req, re
   const id     = crypto.randomUUID();
   const tmpDir = os.tmpdir();
   const img1   = path.join(tmpDir, `${id}_cam1.jpg`);
-  const outPng = path.join(tmpDir, `${id}_detect.png`);
+  const outPng = tsStr
+    ? path.join(PROCESSED_ROOT, tsStr, buildArtifactFileName(tsStr, 'detection', 'png'))
+    : path.join(tmpDir, `${id}_detect.png`);
 
   const cleanup = () => {
-    for (const f of [img1, outPng]) {
+    const tempFiles = [img1];
+    if (!tsStr) tempFiles.push(outPng);
+    for (const f of tempFiles) {
       try { fs.unlinkSync(f); } catch { /* already gone */ }
     }
   };
+
+  if (tsStr) {
+    try { fs.mkdirSync(path.dirname(outPng), { recursive: true }); }
+    catch (e) {
+      return res.status(500).json({ error: 'Failed to create output dir: ' + e.message });
+    }
+  }
 
   try {
     fs.writeFileSync(img1, inputBuffer);
@@ -552,11 +673,14 @@ app.post('/api/detect', upload.fields([{ name: 'cam1', maxCount: 1 }]), (req, re
     return res.status(500).json({ error: 'Failed to spawn python3: ' + result.error.message });
   }
 
-  let pyOut = {};
-  try { pyOut = JSON.parse((result.stdout || '').trim()); } catch { /* ignore */ }
+  const pyOut = parseJsonFromStdout(result.stdout) || {};
+  console.log(pyOut);
 
   if (result.status !== 0 || !pyOut.success) {
     cleanup();
+    if (tsStr) {
+      try { fs.unlinkSync(outPng); } catch { /* ignore partial output */ }
+    }
     const errMsg = pyOut.error || result.stderr || 'detection.py failed';
     console.error('[detect]', errMsg);
     return res.status(500).json({ error: errMsg });
@@ -565,17 +689,12 @@ app.post('/api/detect', upload.fields([{ name: 'cam1', maxCount: 1 }]), (req, re
   console.log(`[detect] ${pyOut.detections} detection(s) written to ${outPng}`);
 
   if (tsStr) {
-    const tsDir = path.join(PROCESSED_ROOT, tsStr);
-    try { fs.mkdirSync(tsDir, { recursive: true }); } catch (e) {
-      cleanup();
-      return res.status(500).json({ error: 'Failed to create output dir: ' + e.message });
-    }
     const outFileName = buildArtifactFileName(tsStr, 'detection', 'png');
-    const persistedAbsPath = path.join(tsDir, outFileName);
+    const persistedAbsPath = outPng;
     const relPath = path.relative(__dirname, persistedAbsPath).split(path.sep).join('/');
-    try { fs.copyFileSync(outPng, persistedAbsPath); } catch (e) {
+    if (!fs.existsSync(persistedAbsPath)) {
       cleanup();
-      return res.status(500).json({ error: 'Failed to persist output: ' + e.message });
+      return res.status(500).json({ error: 'Expected output file missing after processing' });
     }
 
     const sourceArtRecord = resolvedSourceProcess ? getLatestArtifact(tsStr, resolvedSourceProcess) : null;
@@ -595,6 +714,7 @@ app.post('/api/detect', upload.fields([{ name: 'cam1', maxCount: 1 }]), (req, re
 
     return res.json({
       success: true,
+      cached: false,
       tsStr,
       process: 'detection',
       url: `/api/processed/${encodeURIComponent(tsStr)}/${encodeURIComponent(outFileName)}`,
@@ -674,6 +794,7 @@ wss.on('connection', (ws, req) => {
   ws.isAlive    = true;
   ws.clientType = null;   // 'esp' | 'browser'
   ws.cameraId   = null;
+  ws.pendingTofDumpFile = null;
 
   // Close connections that never identify themselves within 10 seconds
   const authTimeout = setTimeout(() => {
@@ -690,6 +811,33 @@ wss.on('connection', (ws, req) => {
     // ── Text messages ──
     if (!isBinary) {
       const text = data.toString();
+
+      // Handle pending ToF dump payload after a tofdump:<filename> header.
+      if (ws.pendingTofDumpFile) {
+        const pendingFile = ws.pendingTofDumpFile;
+        ws.pendingTofDumpFile = null;
+
+        let payload;
+        try {
+          payload = JSON.parse(text);
+        } catch (e) {
+          console.warn(`[tofdump] Invalid JSON payload for ${pendingFile}: ${e.message}`);
+          return;
+        }
+
+        const msg = JSON.stringify({
+          type: 'tofdump',
+          filename: pendingFile,
+          payload,
+          ts: Date.now(),
+          source: ws.cameraId || ws.clientType || 'unknown',
+        });
+
+        for (const b of browserClients) {
+          if (b.readyState === WebSocket.OPEN) b.send(msg);
+        }
+        return;
+      }
 
       // ESP32 registration
       if (text.startsWith('register:')) {
@@ -735,6 +883,20 @@ wss.on('connection', (ws, req) => {
         ws.clientType = 'tof_relay';
         ws.cameraId = null;
         console.log(`  Auxiliary relay registered from ${ip}`);
+        return;
+      }
+
+      // Per-file ToF dump framing from ESP:
+      // first frame: "tofdump:<filename>", second frame: raw JSON payload.
+      if (text.startsWith('tofdump:')) {
+        const filename = text.slice('tofdump:'.length).trim();
+        if (!filename) {
+          console.warn('[tofdump] Empty filename header, ignoring');
+          ws.pendingTofDumpFile = null;
+          return;
+        }
+
+        ws.pendingTofDumpFile = filename;
         return;
       }
 

@@ -41,8 +41,8 @@
 #define TOF_RANGING_FREQ_HZ       15
 #define TOF_ZONES                 16      
 
-#define THRESHOLD_DISTANCE_MM_LOW  1500
-#define THRESHOLD_DISTANCE_MM_HIGH 3000
+#define THRESHOLD_DISTANCE_MM_LOW  200
+#define THRESHOLD_DISTANCE_MM_HIGH 500
 #define THRESHOLD_DETECTION_MIN_NUMBER_OF_ZONES 6
 #define THRESHOLD_MOTION_MAX_ZONES 4
 #define THRESHOLD_MOTION_MAX_TOTAL 20 * 16
@@ -431,6 +431,84 @@ void sendFromSD(uint64_t timestamp) {
   }
 }
 
+String basenameFromPath(const String& path) {
+  int slashPos = path.lastIndexOf('/');
+  if (slashPos < 0) return path;
+  return path.substring(slashPos + 1);
+}
+
+bool sendTofDumpFromSD(const String& path) {
+  File file = SD_MMC.open(path);
+  if (!file) {
+    Serial.println("Failed to open ToF dump: " + path);
+    return false;
+  }
+
+  size_t fileSize = file.size();
+  if (fileSize == 0 || fileSize > 4096) {
+    Serial.printf("Invalid ToF dump size (%u) for %s\n", fileSize, path.c_str());
+    file.close();
+    return false;
+  }
+
+  String payload = file.readString();
+  file.close();
+  payload.trim();
+  if (payload.length() == 0) {
+    Serial.println("Empty ToF dump payload: " + path);
+    return false;
+  }
+
+  if (!client.isConnected()) {
+    Serial.println("WS not available, skipping ToF dump send");
+    return false;
+  }
+
+  String fileName = basenameFromPath(path);
+  String header = "tofdump:" + fileName;
+  client.sendTXT(header);
+  client.sendTXT(payload);
+
+  Serial.printf("ToF dump sent: %s (%u B)\n", fileName.c_str(), fileSize);
+  return true;
+}
+
+void sendPendingTofDumpsFromSD() {
+  File dir = SD_MMC.open("/tofdumps");
+  if (!dir || !dir.isDirectory()) {
+    Serial.println("ToF dump directory unavailable");
+    if (dir) dir.close();
+    return;
+  }
+
+  File entry = dir.openNextFile();
+  while (entry) {
+    if (entry.isDirectory()) {
+      entry = dir.openNextFile();
+      continue;
+    }
+
+    String filePath = String(entry.path());
+    entry.close();
+
+    if (!filePath.endsWith(".json")) {
+      entry = dir.openNextFile();
+      continue;
+    }
+
+    bool sent = sendTofDumpFromSD(filePath);
+    if (sent) {
+      deleteFile(SD_MMC, filePath.c_str());
+    }
+
+    client.loop();
+    delay(10);
+    entry = dir.openNextFile();
+  }
+
+  dir.close();
+}
+
 
 // =================== Capture → SD ===================
 int captureToSD(uint64_t timestamp) {
@@ -502,18 +580,18 @@ bool performOTAIfAvailable() {
 }
 
 bool checkHighMotion(const VL53L5CX_ResultsData results){
-  uint8_t triggerCount = 0;
+  // uint8_t triggerCount = 0;
 
-  for (uint8_t zone = 0; zone < TOF_ZONES; zone++) {
-    int16_t distance = results.distance_mm[zone];
-    if (distance >= THRESHOLD_DISTANCE_MM_LOW && distance <= THRESHOLD_DISTANCE_MM_HIGH) {
-        Serial.println();
-        Serial.print("Positive trigger in zones: ");
-        Serial.print(triggerCount);
-        Serial.println();
-        triggerCount++;
-    }
-  }
+  // for (uint8_t zone = 0; zone < TOF_ZONES; zone++) {
+  //   int16_t distance = results.distance_mm[zone];
+  //   if (distance >= THRESHOLD_DISTANCE_MM_LOW && distance <= THRESHOLD_DISTANCE_MM_HIGH) {
+  //       Serial.println();
+  //       Serial.print("Positive trigger in zones: ");
+  //       Serial.print(triggerCount);
+  //       Serial.println();
+  //       triggerCount++;
+  //   }
+  // }
   if (results.motion_indicator.nb_of_detected_aggregates >= THRESHOLD_MOTION_MAX_ZONES) {
     return true;
   }
@@ -532,9 +610,63 @@ bool checkHighMotion(const VL53L5CX_ResultsData results){
   return false;
 }
 
+void saveToFdump(String file, VL53L5CX_ResultsData data, bool motion){
+
+  char jsonBuffer[1024];
+  size_t offset = 0;
+
+  offset += snprintf(jsonBuffer + offset, sizeof(jsonBuffer) - offset, "{\"distances\":[");
+  for (int i = 0; i < TOF_ZONES && offset < sizeof(jsonBuffer); i++) {
+    offset += snprintf(
+      jsonBuffer + offset,
+      sizeof(jsonBuffer) - offset,
+      (i < TOF_ZONES - 1) ? "%d," : "%d",
+      data.distance_mm[i]
+    );
+  }
+
+  offset += snprintf(jsonBuffer + offset, sizeof(jsonBuffer) - offset, "],\"motion\":[");
+  for (int i = 0; i < TOF_ZONES && offset < sizeof(jsonBuffer); i++) {
+    offset += snprintf(
+      jsonBuffer + offset,
+      sizeof(jsonBuffer) - offset,
+      (i < TOF_ZONES - 1) ? "%u," : "%u",
+      data.motion_indicator.motion[i]
+    );
+  }
+
+  offset += snprintf(
+    jsonBuffer + offset,
+    sizeof(jsonBuffer) - offset,
+    "],\"motionZones\":[%u],\"status\":[",
+    data.motion_indicator.nb_of_detected_aggregates
+  );
+
+  for (int i = 0; i < TOF_ZONES && offset < sizeof(jsonBuffer); i++) {
+    offset += snprintf(
+      jsonBuffer + offset,
+      sizeof(jsonBuffer) - offset,
+      (i < TOF_ZONES - 1) ? "%u," : "%u",
+      data.target_status[i]
+    );
+  }
+
+  offset += snprintf(
+    jsonBuffer + offset,
+    sizeof(jsonBuffer) - offset,
+    "],\"highMotion\":%s}",
+    motion ? "true" : "false"
+  );
+  
+  writeFile(SD_MMC, file.c_str(), jsonBuffer);
+  
+}
+
 void onTofInt(){
   if(tofSensor.getRangingData(&tofData)){
-    if(!checkHighMotion(tofData)){
+    bool motion = checkHighMotion(tofData);
+    uint64_t timestamp = getEpochMillis();
+    if(!motion){
       wakeSlave();
 
       SyncPacket pkt;
@@ -556,7 +688,10 @@ void onTofInt(){
 
       if (captureToSD(pkt.timestamp_ms) == 0)
         Serial.println("Error with capture");
+      timestamp = pkt.timestamp_ms;
     }
+
+    saveToFdump("/tofdumps/" + String(timestamp) + ".json", tofData, motion);
   }
 }
 
@@ -582,6 +717,7 @@ void setup() {
   pinMode(TOF_SENSOR_INTERRUPT_PIN, INPUT_PULLUP);
 
   sdmmcInit();
+  createDir(SD_MMC, "/tofdumps");
   initEspNow();
   ws2812Init();
   ws2812SetColor(2);
@@ -610,10 +746,9 @@ void setup() {
       delay(10);
     }
 
-    // If there is something to send
-    if(!flist.empty()){
-      if(WiFi.status() == WL_CONNECTED && client.isConnected()){
-        // // Allocate single send buffer from PSRAM
+    if (WiFi.status() == WL_CONNECTED && client.isConnected()) {
+      if(!flist.empty()){
+        // Allocate single send buffer from PSRAM for JPEG binary payloads
         g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
         if (!g_sendBuf) {
           Serial.println("FATAL: Could not allocate send buffer in PSRAM");
@@ -625,9 +760,15 @@ void setup() {
           sendFromSD(value);
         }
         free(g_sendBuf);
+        g_sendBuf = nullptr;
         deleteFile(SD_MMC, "/sendlist.txt");
         removeDirRecursive(SD_MMC, "/camera");
-      } else Serial.println("WiFi currently unavailable, will send later");
+      }
+
+      // Send queued ToF JSON files with per-file headers containing file names.
+      sendPendingTofDumpsFromSD();
+    } else {
+      Serial.println("WiFi currently unavailable, will send later");
     }
     // ── OTA (ota_update received during poll above) ───────────────────────
     if (otaRequested || otaPendingRTC) {
