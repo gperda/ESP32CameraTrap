@@ -37,13 +37,15 @@ def main():
     img_path = sys.argv[1]
     out_path = sys.argv[2]
 
+    sam_model = Sam3Model.from_pretrained("facebook/sam3").to("cuda" if torch.cuda.is_available() else "cpu")
+    processor = Sam3Processor.from_pretrained("facebook/sam3")
 
     try:
-        image = Image.open(img_path).convert(RGB)
+        image = Image.open(img_path).convert("RGB")
     except Exception as e:
         fail(f"Could not read image: {e}")
 
-        inputs = processor(
+    inputs = processor(
         images=image,
         text="animal",
         return_tensors="pt"

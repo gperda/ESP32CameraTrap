@@ -115,7 +115,7 @@ def main():
             
 
         image = Image.fromarray(image_np.astype(np.uint8), mode="RGB")
-        #vis_utils.draw_bounding_boxes_on_image(image, boxes, box_colors, display_strs=confidences)
+        vis_utils.draw_bounding_boxes_on_image(image, boxes, box_colors, display_strs=confidences)
 
     try:
         image.save(out_path)
