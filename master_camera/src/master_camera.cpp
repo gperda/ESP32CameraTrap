@@ -16,6 +16,7 @@
 #include <ws2812.h>
 #include <ota_update.h>
 #include <Adafruit_VL53L5CX.h>
+#include "esp_sntp.h"
 
 // =================== CONFIGURATION ===================
 #define CAMERA_ID                 "cam1"
@@ -49,6 +50,8 @@
 #define MAX_WIFI_WAIT_TIME_MS     6000
 #define MAX_WS_WAIT_TIME_MS       4000
 #define WAKEUP_TIMER_SECONDS      10
+
+#define SYNC_TIME_EVERY_N_CONNECTIONS   20
 
 #ifndef CF_ACCESS_CLIENT_ID
 #define CF_ACCESS_CLIENT_ID
@@ -115,7 +118,7 @@ typedef struct Header {
 
 struct SyncPacket {
   uint8_t  type;           // 0x01 = sync, 0x02 = start sending
-  uint64_t timestamp_us;
+  uint64_t timestamp_ms;
   uint8_t  framesCount;
 };
 
@@ -125,6 +128,10 @@ volatile bool slaveReady  = false;
 RTC_DATA_ATTR bool otaPendingRTC      = false;
 volatile bool otaRequested = false;
 volatile bool isUpToDate = false;
+
+RTC_DATA_ATTR int wakeCount = 0;
+
+volatile bool timeSynced = false;
 
 // =================== ToF helpers ===================
 
@@ -266,9 +273,38 @@ void onWsEvent(WStype_t type, uint8_t * payload, size_t length) {
   }
 }
 
-uint64_t timems(struct timeval tv_now) {
-  return (uint64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
+uint64_t getEpochMillis() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (uint64_t)tv.tv_sec * 1000ULL + (tv.tv_usec / 1000ULL);
 }
+
+void onTimeSync(struct timeval *tv) {
+    timeSynced = true;
+}
+
+void syncTimeFromNTP() {
+    sntp_set_time_sync_notification_cb(onTimeSync);
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov"); // UTC, no DST offset
+
+    unsigned long start = millis();
+    Serial.println();
+    Serial.print("Syncing time");
+    while (!timeSynced && millis() - start < 10000) {
+      Serial.print(".");
+        delay(500);
+    }
+
+    if (!timeSynced) {
+        Serial.println("NTP sync failed/timed out");
+    } else {
+      Serial.println();
+      Serial.print("Time is: ");
+      Serial.print(getEpochMillis());
+      Serial.println();
+    }
+}
+
 
 void onSend(const uint8_t* mac, esp_now_send_status_t status) {
   Serial.print(status == ESP_NOW_SEND_SUCCESS ? "Delivered\n" : "Delivery Fail\n");
@@ -293,7 +329,11 @@ void connectToWiFi() {
   
   unsigned long t = millis();
   while (WiFi.status() != WL_CONNECTED && millis() -t < MAX_WIFI_WAIT_TIME_MS) { delay(500); Serial.print("."); }
-  if(WiFi.status() == WL_CONNECTED){    
+  if(WiFi.status() == WL_CONNECTED){  
+    wakeCount++;
+    if (wakeCount == 1 || wakeCount % SYNC_TIME_EVERY_N_CONNECTIONS == 0 ) {
+      syncTimeFromNTP();
+    }
     WiFi.config(WiFi.localIP(), WiFi.gatewayIP(), WiFi.subnetMask(),
                 IPAddress(1,1,1,1), IPAddress(8,8,8,8));
     Serial.printf(" OK  IP=%s\n", WiFi.localIP().toString().c_str());
@@ -499,8 +539,8 @@ void onTofInt(){
 
       SyncPacket pkt;
       pkt.type         = 0x01;
-      pkt.timestamp_us = esp_timer_get_time();
-
+      // pkt.timestamp_us = esp_timer_get_time();
+      pkt.timestamp_ms = getEpochMillis();
       ackReceived = false;
       slaveReady  = false;
       Serial.print("Slave capture signal: ");
@@ -514,7 +554,7 @@ void onTofInt(){
         goToSleep();
       }
 
-      if (captureToSD(pkt.timestamp_us) == 0)
+      if (captureToSD(pkt.timestamp_ms) == 0)
         Serial.println("Error with capture");
     }
   }

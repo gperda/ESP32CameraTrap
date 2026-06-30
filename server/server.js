@@ -241,10 +241,10 @@ app.get('/api/history', requireHistoryAuth, (req, res) => {
   const groupedByTs = new Map();
   for (let i = persistedFrames.length - 1; i >= 0; i -= 1) {
     const entry = persistedFrames[i];
+    console.log(entry);
     if (!entry || !Number.isFinite(entry.tsMs)) continue;
     if (startMs !== null && entry.tsMs < startMs) continue;
     if (endMs !== null && entry.tsMs > endMs) continue;
-
     if (!groupedByTs.has(entry.tsStr)) {
       groupedByTs.set(entry.tsStr, {
         tsStr: entry.tsStr,

@@ -1055,6 +1055,8 @@ async function fetchWithHistoryAuth(url, options = {}, retryOnAuthFailure = true
   if (historyApiToken) headers.set('Authorization', `Bearer ${historyApiToken}`);
   const response = await fetch(url, { ...options, headers });
 
+  console.log(response);
+
   if ((response.status === 401 || response.status === 403) && retryOnAuthFailure) {
     const newToken = promptForHistoryToken();
     if (!newToken) return response;
