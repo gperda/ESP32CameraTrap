@@ -51,22 +51,6 @@ const HISTORY_PROCESS_BUTTONS = ['depthmap', 'undistort', 'detection'];
 
 const persistedFrames = [];
 
-function extractAuthToken(req) {
-  const authHeader = req.get('authorization');
-  if (!authHeader) return '';
-  const trimmed = authHeader.trim();
-  if (/^bearer\s+/i.test(trimmed)) return trimmed.replace(/^bearer\s+/i, '').trim();
-  return trimmed;
-}
-
-function requireHistoryAuth(req, res, next) {
-  if (!REGISTER_TOKEN) return next();
-  const token = extractAuthToken(req);
-  if (!token) return res.status(401).json({ error: 'Authorization token is required' });
-  if (token !== REGISTER_TOKEN) return res.status(403).json({ error: 'Invalid authorization token' });
-  next();
-}
-
 function parseTimestampMs(tsStr) {
   if (typeof tsStr !== 'string' || !/^\d+$/.test(tsStr)) return null;
   const n = Number(tsStr);
@@ -290,7 +274,7 @@ function getLatestArtifact(tsStr, proc) {
 ensureProcessedStorage();
 loadProcessedArtifactsFromIndex();
 
-app.get('/api/history', requireHistoryAuth, (req, res) => {
+app.get('/api/history', (req, res) => {
   const startMsRaw = req.query.startMs;
   const endMsRaw = req.query.endMs;
   const offsetRaw = req.query.offset;
@@ -410,7 +394,7 @@ app.get('/api/history', requireHistoryAuth, (req, res) => {
   });
 });
 
-app.get('/api/history/image', requireHistoryAuth, (req, res) => {
+app.get('/api/history/image', (req, res) => {
   const camId = String(req.query.camId || '');
   const tsStr = String(req.query.ts || '');
   if (!camId || !tsStr) {
@@ -439,7 +423,7 @@ app.get('/api/history/image', requireHistoryAuth, (req, res) => {
   res.sendFile(absPath);
 });
 
-app.get('/api/history/tofdump', requireHistoryAuth, (req, res) => {
+app.get('/api/history/tofdump', (req, res) => {
   const tsStr = String(req.query.ts || '').trim();
   if (!tsStr || !/^\d+$/.test(tsStr)) {
     return res.status(400).json({ error: 'ts is required and must be numeric' });
@@ -843,7 +827,7 @@ app.get('/api/processed/:tsStr/:filename', (req, res) => {
 });
 
 // ─── Artifact lookup endpoints ─────────────────────────────────────────────────
-app.get('/api/artifact', requireHistoryAuth, (req, res) => {
+app.get('/api/artifact', (req, res) => {
   const tsStr = String(req.query.tsStr || '');
   const proc  = sanitizeProcess(req.query.process);
   if (!tsStr || !/^\d+$/.test(tsStr)) {
@@ -859,7 +843,7 @@ app.get('/api/artifact', requireHistoryAuth, (req, res) => {
   res.json(artifact);
 });
 
-app.get('/api/artifacts', requireHistoryAuth, (req, res) => {
+app.get('/api/artifacts', (req, res) => {
   const tsStr = String(req.query.tsStr || '');
   if (!tsStr || !/^\d+$/.test(tsStr)) {
     return res.status(400).json({ error: 'Invalid or missing tsStr' });
