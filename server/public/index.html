@@ -1553,21 +1553,19 @@ function updatePairBadge(entry, camId, sizeKB) {
 
   if (entry.cam1 && entry.cam2) {
     if (entry.comboBtn) entry.comboBtn.disabled = false;
-    if (entry.depthBtn) entry.depthBtn.disabled = false;
-    if (entry.depthAgainBtn) entry.depthAgainBtn.disabled = false;
-    if (entry.undistortBtn) entry.undistortBtn.disabled = false;
-    if (entry.undistortAgainBtn) entry.undistortAgainBtn.disabled = false;
-    if (entry.detectBtn) entry.detectBtn.disabled = false;
-    if (entry.detectAgainBtn) entry.detectAgainBtn.disabled = false;
   }
 
   refreshProcessButtonStates(entry);
 }
 
 function refreshProcessButtonStates(entry) {
+  const hasPair = !!(entry && entry.cam1 && entry.cam2);
   const hasDepth = !!entry?.latestByProcess?.depthmap;
   const hasUndistort = !!entry?.latestByProcess?.undistort;
   const hasDetect = !!entry?.latestByProcess?.detection;
+  const canUndistort = hasPair;
+  const canDetect = hasPair;
+  const canDepth = hasPair && hasUndistort;
 
   if (entry.depthBtn) entry.depthBtn.classList.toggle('has-output', hasDepth);
   if (entry.undistortBtn) entry.undistortBtn.classList.toggle('has-output', hasUndistort);
@@ -1576,6 +1574,13 @@ function refreshProcessButtonStates(entry) {
   if (entry.depthAgainBtn) entry.depthAgainBtn.classList.toggle('has-output', hasDepth);
   if (entry.undistortAgainBtn) entry.undistortAgainBtn.classList.toggle('has-output', hasUndistort);
   if (entry.detectAgainBtn) entry.detectAgainBtn.classList.toggle('has-output', hasDetect);
+
+  if (entry.depthBtn) entry.depthBtn.disabled = !canDepth;
+  if (entry.depthAgainBtn) entry.depthAgainBtn.disabled = !canDepth;
+  if (entry.undistortBtn) entry.undistortBtn.disabled = !canUndistort;
+  if (entry.undistortAgainBtn) entry.undistortAgainBtn.disabled = !canUndistort;
+  if (entry.detectBtn) entry.detectBtn.disabled = !canDetect;
+  if (entry.detectAgainBtn) entry.detectAgainBtn.disabled = !canDetect;
 }
 
 function setProcessArtifactUrl(entry, processName, url) {
@@ -1965,6 +1970,17 @@ async function requestStereoView(tsStr, viewMode, { forceRecompute = false } = {
   if (!entry || !entry.cam1 || !entry.cam2) return;
 
   const mode = viewMode === 'undistort' ? 'undistort' : 'depth';
+  if (mode === 'depth' && !entry.latestByProcess?.undistort) {
+    const panel = document.getElementById('depthPanel');
+    const titleEl = document.getElementById('depthPanelTitle');
+    const statusEl = document.getElementById('depthStatus');
+    panel.classList.add('visible');
+    titleEl.textContent = '⊡ Stereo Depth Map';
+    statusEl.textContent = `Depth is blocked for pair ${tsStr}: run Undistort first.`;
+    statusEl.className = 'depth-status error';
+    refreshProcessButtonStates(entry);
+    return;
+  }
   const processName = mode === 'depth' ? 'depthmap' : mode;
 
   const activeBtn  = mode === 'undistort' ? entry.undistortBtn : entry.depthBtn;
@@ -2042,32 +2058,18 @@ async function requestStereoView(tsStr, viewMode, { forceRecompute = false } = {
 
   if (!forceRecompute && entry.latestByProcess[processName]) {
     renderStereoResult(entry.latestByProcess[processName], true);
-    if (entry.depthBtn) {
-      entry.depthBtn.disabled = false;
-      entry.depthBtn.textContent = '⊡ Depth';
-    }
-    if (entry.depthAgainBtn) entry.depthAgainBtn.disabled = false;
-    if (entry.undistortBtn) {
-      entry.undistortBtn.disabled = false;
-      entry.undistortBtn.textContent = '◫ Undistort';
-    }
-    if (entry.undistortAgainBtn) entry.undistortAgainBtn.disabled = false;
+    if (entry.depthBtn) entry.depthBtn.textContent = '⊡ Depth';
+    if (entry.undistortBtn) entry.undistortBtn.textContent = '◫ Undistort';
+    refreshProcessButtonStates(entry);
     return;
   }
 
   const ready = await ensurePairBlobs(tsStr, ['cam1', 'cam2']);
   if (!ready) {
     setHistoryStatus('History: could not load required pair images', true);
-    if (entry.depthBtn) {
-      entry.depthBtn.disabled = false;
-      entry.depthBtn.textContent = '⊡ Depth';
-    }
-    if (entry.depthAgainBtn) entry.depthAgainBtn.disabled = false;
-    if (entry.undistortBtn) {
-      entry.undistortBtn.disabled = false;
-      entry.undistortBtn.textContent = '◫ Undistort';
-    }
-    if (entry.undistortAgainBtn) entry.undistortAgainBtn.disabled = false;
+    if (entry.depthBtn) entry.depthBtn.textContent = '⊡ Depth';
+    if (entry.undistortBtn) entry.undistortBtn.textContent = '◫ Undistort';
+    refreshProcessButtonStates(entry);
     return;
   }
 
@@ -2097,16 +2099,9 @@ async function requestStereoView(tsStr, viewMode, { forceRecompute = false } = {
     statusEl.textContent = 'Error: ' + e.message;
     statusEl.className   = 'depth-status error';
   } finally {
-    if (entry.depthBtn) {
-      entry.depthBtn.disabled = false;
-      entry.depthBtn.textContent = '⊡ Depth';
-    }
-    if (entry.depthAgainBtn) entry.depthAgainBtn.disabled = false;
-    if (entry.undistortBtn) {
-      entry.undistortBtn.disabled = false;
-      entry.undistortBtn.textContent = '◫ Undistort';
-    }
-    if (entry.undistortAgainBtn) entry.undistortAgainBtn.disabled = false;
+    if (entry.depthBtn) entry.depthBtn.textContent = '⊡ Depth';
+    if (entry.undistortBtn) entry.undistortBtn.textContent = '◫ Undistort';
+    refreshProcessButtonStates(entry);
   }
 }
 
@@ -2215,10 +2210,9 @@ async function requestDetection(tsStr, { forceRecompute = false } = {}) {
     statusEl.className   = 'depth-status error';
   } finally {
     if (entry.detectBtn) {
-      entry.detectBtn.disabled = false;
       entry.detectBtn.textContent = '⊙ Detect';
     }
-    if (entry.detectAgainBtn) entry.detectAgainBtn.disabled = false;
+    refreshProcessButtonStates(entry);
   }
 }
 

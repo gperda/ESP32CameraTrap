@@ -728,7 +728,7 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
 
   const outputMode = 'depth';
   console.log(`[depthmap] ${outputMode} (${pyOut.calibrated ? 'calibrated' : 'uncalibrated'}) written to ${outPng}`);
-
+  
   if (tsStr) {
     // Persist output with tsStr-based naming
     const processName = requestedProcessName;
