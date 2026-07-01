@@ -32,6 +32,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // ─── Stereo depth map endpoint ────────────────────────────────────────────────
 const upload     = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const DEPTHMAP_PY      = path.join(__dirname, 'depthmap.py');
+const UNDISTORT_PY     = path.join(__dirname, 'undistort.py');
 const TRIANGULATION_PY = path.join(__dirname, 'triangulation.py');
 const DETECTION_PY     = path.join(__dirname, 'detection_segmentation.py');
 const CALIB_JSON       = path.join(__dirname, 'calibration.json');
@@ -457,14 +458,14 @@ app.get('/api/history/tofdump', (req, res) => {
   });
 });
 
-app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 'cam2', maxCount: 1 }]), (req, res) => {
+app.post('/api/undistort', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 'cam2', maxCount: 1 }]), (req, res) => {
   const files = req.files;
 
   const requestedMode = typeof req.body?.viewMode === 'string'
     ? req.body.viewMode.trim().toLowerCase()
-    : 'depth';
-  if (!['depth', 'undistort', 'undistort_cam1', 'undistort_cam2'].includes(requestedMode)) {
-    return res.status(400).json({ error: 'Invalid viewMode. Expected depth, undistort, undistort_cam1 or undistort_cam2' });
+    : 'undistort';
+  if (!['undistort', 'undistort_cam1', 'undistort_cam2'].includes(requestedMode)) {
+    return res.status(400).json({ error: 'Invalid viewMode. Expected undistort, undistort_cam1 or undistort_cam2' });
   }
 
   const tsStr = typeof req.body?.tsStr === 'string' ? req.body.tsStr.trim() : null;
@@ -473,7 +474,162 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
     return res.status(400).json({ error: 'Invalid tsStr format: must be numeric' });
   }
 
-  const requestedProcessName = requestedMode === 'depth' ? 'depthmap' : requestedMode;
+  const requestedProcessName = requestedMode;
+  if (tsStr && !forceRecompute) {
+    const existing = getLatestArtifact(tsStr, requestedProcessName);
+    if (existing && existing.absPath && fs.existsSync(existing.absPath)) {
+      return res.json({
+        success: true,
+        cached: true,
+        tsStr,
+        process: requestedProcessName,
+        url: makeProcessedArtifactUrl(tsStr, requestedProcessName, existing.ext),
+        relPath: existing.relPath,
+        calibrated: !!(existing.metadata && existing.metadata.calibrated),
+      });
+    }
+  }
+
+  let cam1Buffer = null;
+  let cam2Buffer = null;
+
+  if (tsStr && !files?.cam1 && !files?.cam2) {
+    const cam1Frame = persistedFrames.find(f => f.tsStr === tsStr && f.camId === 'cam1');
+    const cam2Frame = persistedFrames.find(f => f.tsStr === tsStr && f.camId === 'cam2');
+    if (!cam1Frame || !cam2Frame) {
+      return res.status(404).json({ error: `No cam1/cam2 frames found in history for tsStr=${tsStr}` });
+    }
+    try {
+      cam1Buffer = fs.readFileSync(path.join(__dirname, cam1Frame.relPath));
+      cam2Buffer = fs.readFileSync(path.join(__dirname, cam2Frame.relPath));
+    } catch (e) {
+      return res.status(404).json({ error: 'Frame files not found on disk' });
+    }
+  } else {
+    if (!files || !files.cam1 || !files.cam2) {
+      return res.status(400).json({ error: 'Both cam1 and cam2 files are required' });
+    }
+    cam1Buffer = files.cam1[0].buffer;
+    cam2Buffer = files.cam2[0].buffer;
+  }
+
+  const id      = crypto.randomUUID();
+  const tmpDir  = os.tmpdir();
+  const img1    = path.join(tmpDir, `${id}_cam1.jpg`);
+  const img2    = path.join(tmpDir, `${id}_cam2.jpg`);
+  const outPng  = tsStr
+    ? path.join(PROCESSED_ROOT, tsStr, buildArtifactFileName(tsStr, requestedProcessName, 'png'))
+    : path.join(tmpDir, `${id}_undistort.png`);
+
+  const cleanup = () => {
+    const tempFiles = [img1, img2];
+    if (!tsStr) tempFiles.push(outPng);
+    for (const f of tempFiles) {
+      try { fs.unlinkSync(f); } catch { /* already gone */ }
+    }
+  };
+
+  if (tsStr) {
+    try { fs.mkdirSync(path.dirname(outPng), { recursive: true }); }
+    catch (e) {
+      return res.status(500).json({ error: 'Failed to create output dir: ' + e.message });
+    }
+  }
+
+  try {
+    fs.writeFileSync(img1, cam1Buffer);
+    fs.writeFileSync(img2, cam2Buffer);
+  } catch (e) {
+    cleanup();
+    return res.status(500).json({ error: 'Failed to write temp files: ' + e.message });
+  }
+
+  const args = [UNDISTORT_PY, img1, img2, outPng];
+  if (fs.existsSync(CALIB_JSON)) args.push(CALIB_JSON);
+  args.push(requestedMode);
+
+  const result = spawnSync('python3', args, { timeout: 60_000, encoding: 'utf8' });
+
+  if (result.error) {
+    cleanup();
+    return res.status(500).json({ error: 'Failed to spawn python3: ' + result.error.message });
+  }
+
+  const pyOut = parseJsonFromStdout(result.stdout) || {};
+
+  if (result.status !== 0 || !pyOut.success) {
+    cleanup();
+    if (tsStr) {
+      try { fs.unlinkSync(outPng); } catch { /* ignore partial output */ }
+    }
+    const errMsg = pyOut.error || result.stderr || 'undistort.py failed';
+    console.error('[undistort]', errMsg);
+    return res.status(500).json({ error: errMsg });
+  }
+
+  console.log(`[undistort] ${requestedMode} (${pyOut.calibrated ? 'calibrated' : 'uncalibrated'}) written to ${outPng}`);
+
+  if (tsStr) {
+    const processName = requestedProcessName;
+    const outFileName = buildArtifactFileName(tsStr, processName, 'png');
+    const persistedAbsPath = outPng;
+    const relPath = path.relative(__dirname, persistedAbsPath).split(path.sep).join('/');
+    if (!fs.existsSync(persistedAbsPath)) {
+      cleanup();
+      return res.status(500).json({ error: 'Expected output file missing after processing' });
+    }
+
+    const record = {
+      tsStr,
+      process: processName,
+      ext: 'png',
+      relPath,
+      absPath: persistedAbsPath,
+      sourceProcess: null,
+      sourceRelPath: null,
+      createdAtMs: Date.now(),
+      metadata: { calibrated: pyOut.calibrated || false },
+    };
+    registerProcessedArtifact(record);
+    cleanup();
+
+    return res.json({
+      success: true,
+      cached: false,
+      tsStr,
+      process: processName,
+      url: `/api/processed/${encodeURIComponent(tsStr)}/${encodeURIComponent(outFileName)}`,
+      relPath,
+      calibrated: pyOut.calibrated || false,
+    });
+  }
+
+  let fileName = 'undistorted_preview.png';
+  if (requestedMode === 'undistort_cam1') fileName = 'undistorted_cam1.png';
+  if (requestedMode === 'undistort_cam2') fileName = 'undistorted_cam2.png';
+  res.download(outPng, fileName, (err) => {
+    cleanup();
+    if (err && !res.headersSent) res.status(500).json({ error: 'Download failed' });
+  });
+});
+
+app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 'cam2', maxCount: 1 }]), (req, res) => {
+  const files = req.files;
+
+  const requestedMode = typeof req.body?.viewMode === 'string'
+    ? req.body.viewMode.trim().toLowerCase()
+    : 'depth';
+  if (requestedMode !== 'depth') {
+    return res.status(400).json({ error: 'Invalid viewMode. Expected depth' });
+  }
+
+  const tsStr = typeof req.body?.tsStr === 'string' ? req.body.tsStr.trim() : null;
+  const forceRecompute = parseForceFlag(req.body?.forceRecompute);
+  if (tsStr !== null && !/^\d+$/.test(tsStr)) {
+    return res.status(400).json({ error: 'Invalid tsStr format: must be numeric' });
+  }
+
+  const requestedProcessName = 'depthmap';
   if (tsStr && !forceRecompute) {
     const existing = getLatestArtifact(tsStr, requestedProcessName);
     if (existing && existing.absPath && fs.existsSync(existing.absPath)) {
@@ -548,7 +704,6 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
 
   const args = [DEPTHMAP_PY, img1, img2, outPng];
   if (fs.existsSync(CALIB_JSON)) args.push(CALIB_JSON);
-  args.push(requestedMode);
 
   const result = spawnSync('python3', args, { timeout: 60_000, encoding: 'utf8' });
 
@@ -558,7 +713,6 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
   }
 
   const pyOut = parseJsonFromStdout(result.stdout) || {};
-  console.log(pyOut);
 
   if (result.status !== 0 || !pyOut.success) {
     cleanup();
@@ -570,7 +724,7 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
     return res.status(500).json({ error: errMsg });
   }
 
-  const outputMode = typeof pyOut.mode === 'string' ? pyOut.mode : requestedMode;
+  const outputMode = 'depth';
   console.log(`[depthmap] ${outputMode} (${pyOut.calibrated ? 'calibrated' : 'uncalibrated'}) written to ${outPng}`);
 
   if (tsStr) {
@@ -699,8 +853,23 @@ app.post('/api/detect', upload.fields([{ name: 'cam1', maxCount: 1 }]), (req, re
   let resolvedSourceProcess = null;
 
   if (tsStr && !files?.cam1) {
-    // Chain mode: resolve prior artifact from registry
-    const preferredSource = requestedSource || 'depthmap';
+    // Chain mode: resolve prior artifact from registry.
+    // Detection should run on undistorted imagery, not depth maps.
+    let preferredSource = null;
+    if (requestedSource === 'undistort_cam1' || requestedSource === 'undistort') {
+      preferredSource = requestedSource;
+    } else if (getLatestArtifact(tsStr, 'undistort_cam1')) {
+      preferredSource = 'undistort_cam1';
+    } else if (getLatestArtifact(tsStr, 'undistort')) {
+      preferredSource = 'undistort';
+    }
+
+    if (!preferredSource) {
+      return res.status(404).json({
+        error: `No undistort artifact found for tsStr=${tsStr}. Run undistort first or upload cam1 directly.`,
+      });
+    }
+
     const sourceArt = getLatestArtifact(tsStr, preferredSource);
     if (!sourceArt) {
       return res.status(404).json({

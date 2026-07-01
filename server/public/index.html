@@ -1934,7 +1934,7 @@ async function downloadUndistortedPair(tsStr) {
       }
       const fd = buildStereoFormData(entry, mode);
       fd.append('tsStr', tsStr);
-      const res = await fetch('/api/depthmap', { method: 'POST', body: fd });
+      const res = await fetch('/api/undistort', { method: 'POST', body: fd });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
         throw new Error(err.error || `HTTP ${res.status}`);
@@ -2079,7 +2079,8 @@ async function requestStereoView(tsStr, viewMode, { forceRecompute = false } = {
     statusEl.textContent = mode === 'undistort'
       ? 'Rectifying and undistorting stereo pair…'
       : 'Computing depth map (SGBM)…';
-    const res = await fetch('/api/depthmap', { method: 'POST', body: fd });
+    const endpoint = mode === 'undistort' ? '/api/undistort' : '/api/depthmap';
+    const res = await fetch(endpoint, { method: 'POST', body: fd });
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
@@ -2160,10 +2161,11 @@ async function requestDetection(tsStr, { forceRecompute = false } = {}) {
     return;
   }
 
-  // Chain from depthmap artifact if available; otherwise upload cam1 directly
-  if (entry.latestByProcess && entry.latestByProcess.depthmap) {
-    fd.append('sourceProcess', 'depthmap');
-    statusEl.textContent = 'Running MegaDetector on depth map…';
+  // Chain from undistort artifact when available; otherwise upload cam1 directly.
+  // Detection quality is more reliable on undistorted images than depth maps.
+  if (entry.latestByProcess && entry.latestByProcess.undistort) {
+    fd.append('sourceProcess', 'undistort');
+    statusEl.textContent = 'Running MegaDetector on undistorted cam1…';
   } else {
     if (!entry.cam1) {
       if (entry.detectBtn) { entry.detectBtn.disabled = false; entry.detectBtn.textContent = '⊙ Detect'; }
