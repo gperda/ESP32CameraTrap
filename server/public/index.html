@@ -990,7 +990,7 @@
   <!-- Revealed on first frame -->
   <div class="tof-body" id="tofBody">
 
-    <!-- Left: matrices + received JSON list -->
+    <!-- Left: matrices -->
     <div class="tof-map-col">
       <div class="tof-matrix-grid">
         <div class="tof-matrix-card">
@@ -1024,10 +1024,6 @@
         </div>
       </div>
 
-      <div class="tof-dump-list">
-        <div class="tof-dump-list-title">Received ToF JSON files</div>
-        <div class="tof-dump-list-body" id="tofDumpList"></div>
-      </div>
     </div>
 
     <!-- Right: stats + sparkline -->
@@ -1262,6 +1258,7 @@ async function loadHistoryMetadata({ replace = true } = {}) {
       if (!item || typeof item.tsStr !== 'string') continue;
       if (item.cam1) addOrUpdatePairMetadata(item.tsStr, 'cam1', item.cam1);
       if (item.cam2) addOrUpdatePairMetadata(item.tsStr, 'cam2', item.cam2);
+      if (item.tofDump) applyHistoryTofDumpMetadata(item.tsStr, item.tofDump);
       if (item.processOutputs) applyHistoryProcessOutputs(item.tsStr, item.processOutputs);
     }
 
@@ -1408,6 +1405,15 @@ function formatTs(tsStr) {
   return tsStr.length > 10 ? '\u2026' + tsStr.slice(-10) : tsStr;
 }
 
+function parseTsToMs(tsStr) {
+  const n = Number(tsStr);
+  if (!Number.isFinite(n)) return Date.now();
+  if (String(tsStr).length >= 16) return Math.floor(n / 1000);
+  if (String(tsStr).length === 13) return n;
+  if (String(tsStr).length === 10) return n * 1000;
+  return n;
+}
+
 function ensurePairEntry(tsStr) {
   if (!pairMap.has(tsStr)) {
     // Evict oldest row when at capacity
@@ -1515,6 +1521,14 @@ function ensurePairEntry(tsStr) {
     pairMap.set(tsStr, {
       cam1: null,
       cam2: null,
+      tofDump: {
+        available: false,
+        tsStr,
+        fileName: null,
+        url: null,
+        payload: null,
+        loadingPromise: null,
+      },
       rowEl,
       badge1El,
       badge2El,
@@ -1591,6 +1605,31 @@ function applyHistoryProcessOutputs(tsStr, processOutputs) {
   refreshProcessButtonStates(entry);
 }
 
+function applyHistoryTofDumpMetadata(tsStr, tofDump) {
+  const entry = ensurePairEntry(tsStr);
+  if (!entry.tofDump || typeof entry.tofDump !== 'object') {
+    entry.tofDump = {
+      available: false,
+      tsStr,
+      fileName: null,
+      url: null,
+      payload: null,
+      loadingPromise: null,
+    };
+  }
+
+  const nextAvailable = !!tofDump?.available;
+  const nextUrl = typeof tofDump?.url === 'string' ? tofDump.url : null;
+  if (!nextAvailable || entry.tofDump.url !== nextUrl) {
+    entry.tofDump.payload = null;
+  }
+
+  entry.tofDump.available = nextAvailable;
+  entry.tofDump.tsStr = tsStr;
+  entry.tofDump.fileName = typeof tofDump?.fileName === 'string' ? tofDump.fileName : null;
+  entry.tofDump.url = nextUrl;
+}
+
 function addOrUpdatePair(tsStr, camId, jpeg, frameNum, sizeKB) {
   const entry = ensurePairEntry(tsStr);
   entry[camId] = {
@@ -1654,6 +1693,85 @@ async function ensurePairBlobs(tsStr, camIds = ['cam1', 'cam2']) {
   return true;
 }
 
+async function ensurePairTofDumpLoaded(tsStr) {
+  const entry = pairMap.get(tsStr);
+  if (!entry || !entry.tofDump || !entry.tofDump.available) return false;
+
+  const dumpEntry = entry.tofDump;
+  if (dumpEntry.payload) return true;
+  if (!dumpEntry.url) return false;
+
+  if (!dumpEntry.loadingPromise) {
+    dumpEntry.loadingPromise = (async () => {
+      const res = await fetchWithHistoryAuth(dumpEntry.url);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+
+      const payload = await res.json();
+      if (!payload || typeof payload !== 'object' || !payload.payload || typeof payload.payload !== 'object') {
+        throw new Error('Invalid TOF dump payload format');
+      }
+
+      dumpEntry.payload = payload.payload;
+      dumpEntry.fileName = typeof payload.fileName === 'string' ? payload.fileName : dumpEntry.fileName;
+      return true;
+    })().finally(() => {
+      dumpEntry.loadingPromise = null;
+    });
+  }
+
+  await dumpEntry.loadingPromise;
+  return !!dumpEntry.payload;
+}
+
+function renderTofPlaceholderForPair(tsStr, reasonText) {
+  revealTofBody();
+  drawBlankGrid(depthCanvas, depthCtx, 4);
+  drawBlankGrid(motionCanvas, motionCtx, 4);
+  drawBlankGrid(statusCanvas, statusCtx, 4);
+  document.getElementById('statMin').textContent = '—';
+  document.getElementById('statMax').textContent = '—';
+  document.getElementById('statMean').textContent = '—';
+  document.getElementById('statValid').textContent = '—';
+  document.getElementById('statClose').textContent = '—';
+  document.getElementById('statMotionZones').textContent = '—';
+  document.getElementById('statHighMotion').textContent = '—';
+  document.getElementById('statFileName').textContent = reasonText;
+  document.getElementById('statTs').textContent = formatTs(tsStr);
+  const badge = document.getElementById('alertBadge');
+  badge.textContent = 'NO TOF';
+  badge.classList.remove('active');
+}
+
+async function renderSelectedPairTofDump(tsStr) {
+  const entry = pairMap.get(tsStr);
+  if (!entry || !entry.tofDump) {
+    renderTofPlaceholderForPair(tsStr, 'No TOF dump linked to this pair');
+    return;
+  }
+
+  if (!entry.tofDump.available) {
+    renderTofPlaceholderForPair(tsStr, 'No TOF dump linked to this pair');
+    return;
+  }
+
+  try {
+    const loaded = await ensurePairTofDumpLoaded(tsStr);
+    if (!loaded || !entry.tofDump.payload) {
+      renderTofPlaceholderForPair(tsStr, 'TOF dump metadata available but payload missing');
+      return;
+    }
+    renderTofPayload(entry.tofDump.payload, {
+      filename: entry.tofDump.fileName || `${tsStr}.json`,
+      ts: parseTsToMs(tsStr),
+    });
+  } catch (e) {
+    renderTofPlaceholderForPair(tsStr, `Failed to load TOF dump: ${e.message}`);
+  }
+}
+
 async function showPair(tsStr) {
   if (displayedTs) {
     const prev = pairMap.get(displayedTs);
@@ -1692,6 +1810,8 @@ async function showPair(tsStr) {
       : '  ·  history';
     metaEl.textContent = `${entry[camId].sizeKB}${frameSuffix}`;
   }
+
+  await renderSelectedPairTofDump(tsStr);
 
   setHistoryStatus(`History: selected pair ${formatTs(tsStr)}`);
 }
@@ -2535,9 +2655,14 @@ function getZoneSide(values) {
   return Number.isInteger(n) ? n : 0;
 }
 
-function basename(pathText) {
-  const idx = String(pathText || '').lastIndexOf('/');
-  return idx >= 0 ? String(pathText).slice(idx + 1) : String(pathText || '');
+function extractTsFromTofFileName(fileName) {
+  const text = String(fileName || '').trim();
+  if (!text) return null;
+  const slash = text.lastIndexOf('/');
+  const base = slash >= 0 ? text.slice(slash + 1) : text;
+  const dot = base.lastIndexOf('.');
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  return /^\d+$/.test(stem) ? stem : null;
 }
 
 // ── Canvas refs ───────────────────────────────────────────────────────────────
@@ -2550,18 +2675,13 @@ const statusCtx    = statusCanvas.getContext('2d');
 
 const sparkCanvas = document.getElementById('sparkCanvas');
 const sparkCtx    = sparkCanvas.getContext('2d');
-const tofDumpList = document.getElementById('tofDumpList');
 
 // ── ToF state ─────────────────────────────────────────────────────────────────
 const sparkData   = [];
-const tofDumpEntries = [];
-const MAX_TOF_DUMP_ROWS = 80;
-let selectedTofDumpId = null;
 let tofFrameCount = 0;
 let lastDistances = [];
 let lastStatuses  = [];
 let lastZoneSide  = 0;
-let nextTofDumpId = 1;
 
 function computeTofStats(distances, statuses) {
   if (!Array.isArray(distances) || !distances.length) {
@@ -2649,42 +2769,6 @@ function drawMatrix(canvas, ctx, values, zoneSide, colorFn, labelFn) {
   }
 }
 
-function renderDumpList() {
-  if (!tofDumpList) return;
-  tofDumpList.innerHTML = '';
-
-  if (!tofDumpEntries.length) {
-    const empty = document.createElement('div');
-    empty.className = 'tof-dump-empty';
-    empty.textContent = 'No JSON dump received yet';
-    tofDumpList.appendChild(empty);
-    return;
-  }
-
-  for (const entry of tofDumpEntries) {
-    const row = document.createElement('div');
-    row.className = 'tof-dump-row';
-    if (entry.id === selectedTofDumpId) row.classList.add('active');
-
-    const left = document.createElement('span');
-    left.textContent = basename(entry.filename || 'unknown.json');
-    const right = document.createElement('span');
-    right.textContent = new Date(entry.ts).toLocaleTimeString();
-
-    row.appendChild(left);
-    row.appendChild(right);
-    row.addEventListener('click', () => {
-      selectedTofDumpId = entry.id;
-      renderDumpList();
-      renderTofPayload(entry.payload, {
-        filename: entry.filename,
-        ts: entry.ts,
-      });
-    });
-    tofDumpList.appendChild(row);
-  }
-}
-
 function revealTofBody() {
   const overlay = document.getElementById('tofSleepOverlay');
   const body = document.getElementById('tofBody');
@@ -2753,21 +2837,28 @@ function renderTofPayload(payload, meta = {}) {
 
 function processTofDump(obj) {
   if (!obj || typeof obj !== 'object' || !obj.payload || typeof obj.payload !== 'object') return;
-  const entry = {
-    id: nextTofDumpId++,
-    filename: obj.filename || 'unknown.json',
-    payload: obj.payload,
-    ts: Number(obj.ts) || Date.now(),
-  };
+  const tsStr = typeof obj.tsStr === 'string' && /^\d+$/.test(obj.tsStr)
+    ? obj.tsStr
+    : extractTsFromTofFileName(obj.filename);
+  if (!tsStr) return;
 
-  tofDumpEntries.unshift(entry);
-  if (tofDumpEntries.length > MAX_TOF_DUMP_ROWS) tofDumpEntries.length = MAX_TOF_DUMP_ROWS;
-  selectedTofDumpId = entry.id;
-  renderDumpList();
-  renderTofPayload(entry.payload, {
-    filename: entry.filename,
-    ts: entry.ts,
+  const entry = ensurePairEntry(tsStr);
+  applyHistoryTofDumpMetadata(tsStr, {
+    available: true,
+    fileName: obj.filename || `${tsStr}.json`,
+    url: typeof obj.url === 'string' ? obj.url : `/api/history/tofdump?ts=${encodeURIComponent(tsStr)}`,
   });
+
+  if (entry.tofDump) {
+    entry.tofDump.payload = obj.payload;
+  }
+
+  if (displayedTs === tsStr) {
+    renderTofPayload(obj.payload, {
+      filename: obj.filename || `${tsStr}.json`,
+      ts: Number(obj.ts) || parseTsToMs(tsStr),
+    });
+  }
 }
 
 // ── Draw rolling sparkline ────────────────────────────────────────────────────
@@ -2817,6 +2908,7 @@ function drawSpark(minVal) {
 // ── Process one tof_frame message ────────────────────────────────────────────
 function processToFFrame(obj) {
   if (!obj || !Array.isArray(obj.distances)) return;
+  if (displayedTs) return;
   renderTofPayload(
     {
       distances: obj.distances,
@@ -2876,7 +2968,6 @@ function drawBlankGrid(canvas, ctx, zoneSide = 4) {
 drawBlankGrid(depthCanvas, depthCtx, 4);
 drawBlankGrid(motionCanvas, motionCtx, 4);
 drawBlankGrid(statusCanvas, statusCtx, 4);
-renderDumpList();
 </script>
 </body>
 </html>

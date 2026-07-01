@@ -37,6 +37,7 @@ const DETECTION_PY     = path.join(__dirname, 'detection_segmentation.py');
 const CALIB_JSON       = path.join(__dirname, 'calibration.json');
 const FRAME_ROOT       = path.join(DATA_ROOT, 'frames');
 const FRAME_INDEX_FILE = path.join(DATA_ROOT, 'frame_index.ndjson');
+const TOF_DUMP_ROOT       = path.join(DATA_ROOT, 'tofdumps');
 const PROCESSED_ROOT        = path.join(DATA_ROOT, 'processed');
 const PROCESSED_INDEX_FILE  = path.join(DATA_ROOT, 'processed_index.ndjson');
 const HISTORY_DEFAULT_LIMIT = 200;
@@ -136,6 +137,40 @@ function makeHistoryImageUrl(camId, tsStr) {
   return `/api/history/image?camId=${encodeURIComponent(camId)}&ts=${encodeURIComponent(tsStr)}`;
 }
 
+function makeHistoryTofDumpUrl(tsStr) {
+  return `/api/history/tofdump?ts=${encodeURIComponent(tsStr)}`;
+}
+
+function makeTofDumpAbsPath(tsStr) {
+  return path.join(TOF_DUMP_ROOT, `${tsStr}.json`);
+}
+
+function extractTimestampFromTofDumpName(fileName) {
+  const base = path.basename(String(fileName || '').trim());
+  const ext = path.extname(base);
+  const stem = ext ? base.slice(0, -ext.length) : base;
+  if (!/^\d+$/.test(stem)) return null;
+  return stem;
+}
+
+function ensureTofDumpStorage() {
+  fs.mkdirSync(TOF_DUMP_ROOT, { recursive: true });
+}
+
+function persistIncomingTofDump(tsStr, payload, source = 'unknown') {
+  const absPath = makeTofDumpAbsPath(tsStr);
+  const jsonText = JSON.stringify(payload);
+
+  fs.writeFile(absPath, jsonText, 'utf8', (writeErr) => {
+    if (writeErr) {
+      console.warn('[tofdump] write failed:', writeErr.message);
+      return;
+    }
+
+    console.log(`[tofdump] persisted ${tsStr}.json (${source})`);
+  });
+}
+
 function persistIncomingFrame(camId, tsStr, jpegData) {
   const safeCamId = String(camId || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
   const camDir = path.join(FRAME_ROOT, safeCamId);
@@ -177,6 +212,7 @@ function persistIncomingFrame(camId, tsStr, jpegData) {
 
 ensurePersistenceStorage();
 loadPersistedFramesFromIndex();
+ensureTofDumpStorage();
 
 // ─── Processed artifact helpers ───────────────────────────────────────────────
 function sanitizeProcess(proc) {
@@ -288,6 +324,7 @@ app.get('/api/history', requireHistoryAuth, (req, res) => {
         tsMs: entry.tsMs,
         cam1: null,
         cam2: null,
+        tofDump: null,
       });
     }
     const row = groupedByTs.get(entry.tsStr);
@@ -324,6 +361,33 @@ app.get('/api/history', requireHistoryAuth, (req, res) => {
   }
 
   for (const row of rows) {
+    const tofDumpAbsPath = makeTofDumpAbsPath(row.tsStr);
+    if (fs.existsSync(tofDumpAbsPath)) {
+      let dumpStats = null;
+      try {
+        dumpStats = fs.statSync(tofDumpAbsPath);
+      } catch {
+        dumpStats = null;
+      }
+      row.tofDump = {
+        available: true,
+        tsStr: row.tsStr,
+        fileName: `${row.tsStr}.json`,
+        sizeBytes: dumpStats ? Number(dumpStats.size) || 0 : null,
+        storedAtMs: dumpStats ? Number(dumpStats.mtimeMs) || null : null,
+        url: makeHistoryTofDumpUrl(row.tsStr),
+      };
+    } else {
+      row.tofDump = {
+        available: false,
+        tsStr: row.tsStr,
+        fileName: null,
+        sizeBytes: null,
+        storedAtMs: null,
+        url: null,
+      };
+    }
+
     const processOutputs = {};
     const existing = processByTs.get(row.tsStr) || {};
     for (const processName of HISTORY_PROCESS_BUTTONS) {
@@ -373,6 +437,40 @@ app.get('/api/history/image', requireHistoryAuth, (req, res) => {
   res.setHeader('Content-Type', 'image/jpeg');
   res.setHeader('Cache-Control', 'private, max-age=60');
   res.sendFile(absPath);
+});
+
+app.get('/api/history/tofdump', requireHistoryAuth, (req, res) => {
+  const tsStr = String(req.query.ts || '').trim();
+  if (!tsStr || !/^\d+$/.test(tsStr)) {
+    return res.status(400).json({ error: 'ts is required and must be numeric' });
+  }
+
+  const absPath = makeTofDumpAbsPath(tsStr);
+  if (!fs.existsSync(absPath)) {
+    return res.status(404).json({ error: 'ToF dump file is missing on disk' });
+  }
+
+  let stats = null;
+  try {
+    stats = fs.statSync(absPath);
+  } catch {
+    stats = null;
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(fs.readFileSync(absPath, 'utf8'));
+  } catch (e) {
+    return res.status(500).json({ error: `Failed to parse TOF dump JSON: ${e.message}` });
+  }
+
+  res.json({
+    tsStr,
+    fileName: `${tsStr}.json`,
+    storedAtMs: stats ? Number(stats.mtimeMs) || null : null,
+    source: null,
+    payload,
+  });
 });
 
 app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 'cam2', maxCount: 1 }]), (req, res) => {
@@ -816,6 +914,11 @@ wss.on('connection', (ws, req) => {
       if (ws.pendingTofDumpFile) {
         const pendingFile = ws.pendingTofDumpFile;
         ws.pendingTofDumpFile = null;
+        const tsStr = extractTimestampFromTofDumpName(pendingFile);
+        if (!tsStr) {
+          console.warn(`[tofdump] Filename must contain numeric timestamp: ${pendingFile}`);
+          return;
+        }
 
         let payload;
         try {
@@ -825,11 +928,15 @@ wss.on('connection', (ws, req) => {
           return;
         }
 
+        persistIncomingTofDump(tsStr, payload, ws.cameraId || ws.clientType || 'unknown');
+
         const msg = JSON.stringify({
           type: 'tofdump',
-          filename: pendingFile,
+          tsStr,
+          filename: `${tsStr}.json`,
+          url: makeHistoryTofDumpUrl(tsStr),
           payload,
-          ts: Date.now(),
+          ts: parseTimestampMs(tsStr) || Date.now(),
           source: ws.cameraId || ws.clientType || 'unknown',
         });
 
@@ -892,6 +999,12 @@ wss.on('connection', (ws, req) => {
         const filename = text.slice('tofdump:'.length).trim();
         if (!filename) {
           console.warn('[tofdump] Empty filename header, ignoring');
+          ws.pendingTofDumpFile = null;
+          return;
+        }
+
+        if (!extractTimestampFromTofDumpName(filename)) {
+          console.warn('[tofdump] Ignoring non-timestamp filename header:', filename);
           ws.pendingTofDumpFile = null;
           return;
         }

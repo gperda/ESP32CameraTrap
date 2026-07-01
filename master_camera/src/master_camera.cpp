@@ -665,7 +665,6 @@ void saveToFdump(String file, VL53L5CX_ResultsData data, bool motion){
 void onTofInt(){
   if(tofSensor.getRangingData(&tofData)){
     bool motion = checkHighMotion(tofData);
-    uint64_t timestamp = getEpochMillis();
     if(!motion){
       wakeSlave();
 
@@ -688,10 +687,11 @@ void onTofInt(){
 
       if (captureToSD(pkt.timestamp_ms) == 0)
         Serial.println("Error with capture");
-      timestamp = pkt.timestamp_ms;
+      else{
+        saveToFdump("/tofdumps/" + String(pkt.timestamp_ms) + ".json", tofData, motion);
+      }
     }
 
-    saveToFdump("/tofdumps/" + String(timestamp) + ".json", tofData, motion);
   }
 }
 
