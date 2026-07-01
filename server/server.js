@@ -558,6 +558,7 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
   }
 
   const pyOut = parseJsonFromStdout(result.stdout) || {};
+  console.log(pyOut);
 
   if (result.status !== 0 || !pyOut.success) {
     cleanup();
@@ -756,7 +757,6 @@ app.post('/api/detect', upload.fields([{ name: 'cam1', maxCount: 1 }]), (req, re
   }
 
   const pyOut = parseJsonFromStdout(result.stdout) || {};
-  console.log(pyOut);
 
   if (result.status !== 0 || !pyOut.success) {
     cleanup();

@@ -38,14 +38,14 @@ import cv2
 
 # ── SGBM parameters — tune these for your baseline / resolution ──────────────
 MIN_DISPARITY   = 0
-NUM_DISPARITIES = 64     # must be divisible by 16
-BLOCK_SIZE      = 111      # odd, 3–11 recommended
+NUM_DISPARITIES = 128     # must be divisible by 16
+BLOCK_SIZE      = 3      # odd, 3–11 recommended
 P1              = 8  * 3 * BLOCK_SIZE ** 2
 P2              = 32 * 3 * BLOCK_SIZE ** 2
-DISP12_MAX_DIFF = -1
-UNIQUENESS_RATIO     = 10
+DISP12_MAX_DIFF = 10
+UNIQUENESS_RATIO     = 2
 SPECKLE_WINDOW_SIZE  = 0
-SPECKLE_RANGE        = 10
+SPECKLE_RANGE        = 0
 
 # Maximum long-edge size to process (resize if larger, for speed)
 MAX_PROCESS_DIM = 2560
@@ -141,7 +141,6 @@ def make_undistort_preview(left_bgr, right_bgr):
 
     out[:left_bgr.shape[0], :left_bgr.shape[1]] = left_bgr
     out[:right_bgr.shape[0], left_bgr.shape[1]:left_bgr.shape[1] + right_bgr.shape[1]] = right_bgr
-
     split_x = left_bgr.shape[1]
     cv2.line(out, (split_x, 0), (split_x, h - 1), (255, 255, 255), 1)
     # Labels at the bottom; left side is now cam2, right side is cam1
@@ -154,8 +153,8 @@ def main():
     if len(sys.argv) < 4:
         fail("Usage: depthmap.py <img1> <img2> <outpath> [<calib_json>]")
 
-    img1_path   = sys.argv[1]
-    img2_path   = sys.argv[2]
+    left_path   = sys.argv[1]
+    right_path   = sys.argv[2]
     out_path    = sys.argv[3]
     calib_path  = sys.argv[4] if len(sys.argv) >= 5 else None
     mode        = (sys.argv[5] if len(sys.argv) >= 6 else "depth").strip().lower()
@@ -166,16 +165,17 @@ def main():
         )
 
     # ── Load images ───────────────────────────────────────────────────────────
-    left_bgr  = cv2.imread(img1_path)
-    right_bgr = cv2.imread(img2_path)
+    left_bgr  = cv2.imread(left_path)
+    right_bgr = cv2.imread(right_path)
     if left_bgr is None:
-        fail(f"Could not read cam1 image: {img1_path}")
+        fail(f"Could not read cam1 image: {left_path}")
     if right_bgr is None:
-        fail(f"Could not read cam2 image: {img2_path}")
+        fail(f"Could not read cam2 image: {right_path}")
 
-    # Resize both to the same (smaller) resolution for speed
-    left_bgr,  scale = scale_to_max(left_bgr,  MAX_PROCESS_DIM)
-    right_bgr, _     = scale_to_max(right_bgr, MAX_PROCESS_DIM)
+    # # Resize both to the same (smaller) resolution for speed
+    # left_bgr,  scale = scale_to_max(left_bgr,  MAX_PROCESS_DIM)
+    # right_bgr, _     = scale_to_max(right_bgr, MAX_PROCESS_DIM)
+    scale = 1.0
 
     # Ensure same size (crop/pad if cameras have slightly different aspect)
     h = min(left_bgr.shape[0], right_bgr.shape[0])
@@ -216,8 +216,8 @@ def main():
         map1x, map1y = cv2.initUndistortRectifyMap(K1, D1, R1, P1_, image_size, cv2.CV_32FC1)
         map2x, map2y = cv2.initUndistortRectifyMap(K2, D2, R2, P2_, image_size, cv2.CV_32FC1)
 
-        left_rect  = cv2.remap(left_bgr,  map1x, map1y, cv2.INTER_LINEAR)
-        right_rect = cv2.remap(right_bgr, map2x, map2y, cv2.INTER_LINEAR)
+        left_rect  = cv2.remap(left_bgr,  map2x, map2y, cv2.INTER_LINEAR)
+        right_rect = cv2.remap(right_bgr, map1x, map1y, cv2.INTER_LINEAR)
 
         left_gray  = cv2.cvtColor(left_rect,  cv2.COLOR_BGR2GRAY)
         right_gray = cv2.cvtColor(right_rect, cv2.COLOR_BGR2GRAY)
@@ -241,6 +241,7 @@ def main():
         preview_left = left_rect if calibrated else left_bgr
         preview_right = right_rect if calibrated else right_bgr
         # Swap order: cam2 on left, cam1 on right (matches JS side-mapping)
+        print(preview_left.shape, preview_right.shape)
         out_img = make_undistort_preview(preview_right, preview_left)
         mode_label = "undistort"
     elif mode == "undistort_cam1":
@@ -252,13 +253,13 @@ def main():
 
     # Annotate processing mode and calibration state
     state_label = "calibrated" if calibrated else "uncalibrated"
-    cv2.putText(
-        out_img, f"{mode_label} · {state_label}", (8, out_img.shape[0] - 8),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA,
-    )
+    # cv2.putText(
+    #     out_img, f"{mode_label} · {state_label}", (8, out_img.shape[0] - 8),
+    #     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA,
+    # )
 
     cv2.imwrite(out_path, out_img)
-    print(json.dumps({"success": True, "calibrated": calibrated, "mode": mode_label}), flush=True)
+    print(json.dumps({"success": True, "calibrated": calibrated, "mode": mode_label, "size": image_size}), flush=True)
     sys.exit(0)
 
 
