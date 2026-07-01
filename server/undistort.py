@@ -66,18 +66,14 @@ def make_undistort_preview(left_bgr, right_bgr):
 
 def main():
     if len(sys.argv) < 4:
-        fail("Usage: undistort.py <img1> <img2> <outpath> [<calib_json>] [<mode>]")
+        fail("Usage: undistort.py <img1> <img2> <out1> <out2> <outpath> [<calib_json>]")
 
     left_path = sys.argv[1]
     right_path = sys.argv[2]
-    out_path = sys.argv[3]
-    calib_path = sys.argv[4] if len(sys.argv) >= 5 else None
-    mode = (sys.argv[5] if len(sys.argv) >= 6 else "undistort").strip().lower()
-    if mode not in ("undistort", "undistort_cam1", "undistort_cam2"):
-        fail(
-            f"Invalid mode: '{mode}'. Expected one of "
-            "'undistort', 'undistort_cam1', 'undistort_cam2'"
-        )
+    out1_path = sys.argv[3]
+    out2_path = sys.argv[4]
+    out_path = sys.argv[5]
+    calib_path = sys.argv[6] if len(sys.argv) >= 5 else None
 
     left_bgr = cv2.imread(left_path)
     right_bgr = cv2.imread(right_path)
@@ -126,16 +122,12 @@ def main():
         right_out = cv2.remap(right_bgr, map1x, map1y, cv2.INTER_LINEAR)
         calibrated = True
 
-    if mode == "undistort":
-        # Swap order: cam2 on left, cam1 on right (matches existing browser mapping).
         out_img = make_undistort_preview(right_out, left_out)
-    elif mode == "undistort_cam1":
-        out_img = left_out
-    else:
-        out_img = right_out
 
     cv2.imwrite(out_path, out_img)
-    print(json.dumps({"success": True, "calibrated": calibrated, "mode": mode, "size": image_size}), flush=True)
+    cv2.imwrite(out1_path, right_out)
+    cv2.imwrite(out2_path, left_out)
+    print(json.dumps({"success": True, "calibrated": calibrated, "mode": "undistort", "size": image_size}), flush=True)
     sys.exit(0)
 
 

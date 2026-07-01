@@ -520,6 +520,8 @@ app.post('/api/undistort', upload.fields([{ name: 'cam1', maxCount: 1 }, { name:
   const outPng  = tsStr
     ? path.join(PROCESSED_ROOT, tsStr, buildArtifactFileName(tsStr, requestedProcessName, 'png'))
     : path.join(tmpDir, `${id}_undistort.png`);
+  const out1 = path.join(PROCESSED_ROOT, tsStr, buildArtifactFileName(tsStr, requestedProcessName + "_cam1", 'png'));
+  const out2 = path.join(PROCESSED_ROOT, tsStr, buildArtifactFileName(tsStr, requestedProcessName + "_cam2", 'png'));
 
   const cleanup = () => {
     const tempFiles = [img1, img2];
@@ -544,7 +546,7 @@ app.post('/api/undistort', upload.fields([{ name: 'cam1', maxCount: 1 }, { name:
     return res.status(500).json({ error: 'Failed to write temp files: ' + e.message });
   }
 
-  const args = [UNDISTORT_PY, img1, img2, outPng];
+  const args = [UNDISTORT_PY, img1, img2, out1, out2, outPng];
   if (fs.existsSync(CALIB_JSON)) args.push(CALIB_JSON);
   args.push(requestedMode);
 
@@ -567,7 +569,7 @@ app.post('/api/undistort', upload.fields([{ name: 'cam1', maxCount: 1 }, { name:
     return res.status(500).json({ error: errMsg });
   }
 
-  console.log(`[undistort] ${requestedMode} (${pyOut.calibrated ? 'calibrated' : 'uncalibrated'}) written to ${outPng}`);
+  console.log(`[undistort] ${requestedMode} (${pyOut.calibrated ? 'calibrated' : 'uncalibrated'}) images written to ${out1}, ${out2}, ${outPng}`);
 
   if (tsStr) {
     const processName = requestedProcessName;
