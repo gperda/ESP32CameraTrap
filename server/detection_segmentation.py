@@ -111,6 +111,7 @@ def main():
             if np.any(mask_bool):
                 color = mask_colors[i % len(mask_colors)].astype(np.float32)
                 image_np[mask_bool] = (1.0 - alpha) * image_np[mask_bool] + alpha * color
+            
 
             
 

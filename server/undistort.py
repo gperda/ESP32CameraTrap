@@ -2,17 +2,16 @@
 undistort.py — Stereo undistortion/rectification outputs using OpenCV
 
 Usage:
-    python3 undistort.py <img1> <img2> <outpath> [<calib_json>] [<mode>]
+    python3 undistort.py <img1> <img2> <out1> <out2> <out_preview> [<calib_json>] [<legacy_mode>]
 
 Arguments:
     img1        Path to left camera JPEG (cam1)
     img2        Path to right camera JPEG (cam2)
-    outpath     Path for output PNG
+    out1        Path for the rectified cam1 PNG
+    out2        Path for the rectified cam2 PNG
+    out_preview Path for the side-by-side preview PNG
     calib_json  (optional) Path to calibration.json
-    mode        (optional) one of:
-                - "undistort" (side-by-side preview)
-                - "undistort_cam1" (cam1 image only)
-                - "undistort_cam2" (cam2 image only)
+    legacy_mode (optional) Ignored legacy argument kept for backward compatibility
 
 Exits with code 0 on success, 1 on failure.
 Prints a single JSON line to stdout.
@@ -96,7 +95,7 @@ def main():
     if calib_path and os.path.isfile(calib_path):
         K1, D1, K2, D2, R, T = load_calibration(calib_path)
 
-        R1, R2, P1_, P2_, _, _, _ = cv2.stereoRectify(
+        R1, R2, P1_, P2_, Q, _, _ = cv2.stereoRectify(
             K1, D1, K2, D2, image_size, R, T,
             flags=cv2.CALIB_ZERO_DISPARITY, alpha=0,
         )
@@ -109,6 +108,7 @@ def main():
             _calib_data["R2"] = R2.tolist()
             _calib_data["P1"] = P1_.tolist()
             _calib_data["P2"] = P2_.tolist()
+            _calib_data["Q"] = Q.tolist()
             _calib_data["image_size"] = list(image_size)
             with open(calib_path, "w") as _f:
                 json.dump(_calib_data, _f, indent=2)

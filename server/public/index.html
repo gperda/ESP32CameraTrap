@@ -1930,29 +1930,28 @@ async function downloadUndistortedPair(tsStr) {
   try {
     dlLink.textContent = 'Preparing cam1/cam2 files…';
 
-    // Helper: get blob for a single undistort mode — from cache URL or new request
-    const getUndistortBlob = async (mode) => {
-      if (entry.latestByProcess[mode]) {
-        const r = await fetch(entry.latestByProcess[mode]);
-        if (!r.ok) throw new Error(`HTTP ${r.status} fetching cached ${mode}`);
-        return r.blob();
-      }
-      const fd = buildStereoFormData(entry, mode);
-      fd.append('tsStr', tsStr);
-      const res = await fetch('/api/undistort', { method: 'POST', body: fd });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-        throw new Error(err.error || `HTTP ${res.status}`);
-      }
-      const data = await res.json();
-      entry.latestByProcess[mode] = data.url;
-      const r2 = await fetch(data.url);
-      if (!r2.ok) throw new Error(`HTTP ${r2.status}`);
-      return r2.blob();
-    };
+    const fd = buildStereoFormData(entry, 'undistort');
+    fd.append('tsStr', tsStr);
+    const res = await fetch('/api/undistort', { method: 'POST', body: fd });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
 
-    const cam1Blob = await getUndistortBlob('undistort_cam1');
-    const cam2Blob = await getUndistortBlob('undistort_cam2');
+    const data = await res.json();
+    setProcessArtifactUrl(entry, 'undistort', data.url);
+
+    const cam1Url = data.downloads?.cam1Url;
+    const cam2Url = data.downloads?.cam2Url;
+    if (!cam1Url || !cam2Url) {
+      throw new Error('Undistort response did not include cam1/cam2 downloads');
+    }
+
+    const [cam1Res, cam2Res] = await Promise.all([fetch(cam1Url), fetch(cam2Url)]);
+    if (!cam1Res.ok) throw new Error(`HTTP ${cam1Res.status} fetching undistorted cam1`);
+    if (!cam2Res.ok) throw new Error(`HTTP ${cam2Res.status} fetching undistorted cam2`);
+
+    const [cam1Blob, cam2Blob] = await Promise.all([cam1Res.blob(), cam2Res.blob()]);
 
     downloadBlob(cam1Blob, `${tsStr}_undistort_cam1.png`);
     downloadBlob(cam2Blob, `${tsStr}_undistort_cam2.png`);
@@ -2156,10 +2155,7 @@ async function requestDetection(tsStr, { forceRecompute = false } = {}) {
     return;
   }
 
-  // Chain from undistort artifact when available; otherwise upload cam1 directly.
-  // Detection quality is more reliable on undistorted images than depth maps.
   if (entry.latestByProcess && entry.latestByProcess.undistort) {
-    fd.append('sourceProcess', 'undistort');
     statusEl.textContent = 'Running MegaDetector on undistorted cam1…';
   } else {
     if (!entry.cam1) {

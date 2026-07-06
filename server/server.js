@@ -43,10 +43,12 @@ const PROCESSED_ROOT        = path.join(DATA_ROOT, 'processed');
 const PROCESSED_INDEX_FILE  = path.join(DATA_ROOT, 'processed_index.ndjson');
 const HISTORY_DEFAULT_LIMIT = 200;
 const HISTORY_MAX_LIMIT = 2000;
+const INTERNAL_UNDISTORT_CAM1_LABEL = 'undistorted_cam1';
+const INTERNAL_UNDISTORT_CAM2_LABEL = 'undistorted_cam2';
 
 // Process enum — all valid process identifiers for the artifact pipeline
 const VALID_PROCESSES = new Set([
-  'undistort', 'undistort_cam1', 'undistort_cam2', 'depthmap', 'detection', 'segmentation',
+  'undistort', 'depthmap', 'detection', 'segmentation',
 ]);
 const HISTORY_PROCESS_BUTTONS = ['depthmap', 'undistort', 'detection'];
 
@@ -223,6 +225,29 @@ function makeProcessedArtifactUrl(tsStr, process, ext) {
   return `/api/processed/${encodeURIComponent(tsStr)}/${encodeURIComponent(fileName)}`;
 }
 
+function buildInternalUndistortFileName(tsStr, label) {
+  return `${tsStr}_${label}.png`;
+}
+
+function makeInternalUndistortAbsPath(tsStr, label) {
+  return path.join(PROCESSED_ROOT, tsStr, buildInternalUndistortFileName(tsStr, label));
+}
+
+function makeInternalUndistortUrl(tsStr, label) {
+  return `/api/processed/${encodeURIComponent(tsStr)}/${encodeURIComponent(buildInternalUndistortFileName(tsStr, label))}`;
+}
+
+function getInternalUndistortInfo(tsStr, label) {
+  const absPath = makeInternalUndistortAbsPath(tsStr, label);
+  if (!fs.existsSync(absPath)) return null;
+  return {
+    label,
+    absPath,
+    relPath: path.relative(__dirname, absPath).split(path.sep).join('/'),
+    url: makeInternalUndistortUrl(tsStr, label),
+  };
+}
+
 const processedArtifacts = [];
 
 function ensureProcessedStorage() {
@@ -270,6 +295,34 @@ function getLatestArtifact(tsStr, proc) {
     if (r.tsStr === tsStr && r.process === proc) return r;
   }
   return null;
+}
+
+function findDetectionMasksForTs(tsStr) {
+  const detectionArtifact = getLatestArtifact(tsStr, 'detection');
+  if (!detectionArtifact || typeof detectionArtifact.absPath !== 'string') return [];
+
+  const detectionDir = path.dirname(detectionArtifact.absPath);
+  const detectionBase = path.basename(detectionArtifact.absPath, path.extname(detectionArtifact.absPath));
+  const maskPattern = new RegExp(`^${detectionBase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}_mask_(\\d+)\\.png$`);
+
+  let names = [];
+  try {
+    names = fs.readdirSync(detectionDir);
+  } catch {
+    return [];
+  }
+
+  const matched = [];
+  for (const name of names) {
+    const m = name.match(maskPattern);
+    if (!m) continue;
+    const idx = Number(m[1]);
+    if (!Number.isFinite(idx)) continue;
+    matched.push({ idx, absPath: path.join(detectionDir, name) });
+  }
+
+  matched.sort((a, b) => a.idx - b.idx);
+  return matched.map(m => m.absPath);
 }
 
 ensureProcessedStorage();
@@ -464,8 +517,8 @@ app.post('/api/undistort', upload.fields([{ name: 'cam1', maxCount: 1 }, { name:
   const requestedMode = typeof req.body?.viewMode === 'string'
     ? req.body.viewMode.trim().toLowerCase()
     : 'undistort';
-  if (!['undistort', 'undistort_cam1', 'undistort_cam2'].includes(requestedMode)) {
-    return res.status(400).json({ error: 'Invalid viewMode. Expected undistort, undistort_cam1 or undistort_cam2' });
+  if (requestedMode !== 'undistort') {
+    return res.status(400).json({ error: 'Invalid viewMode. Expected undistort' });
   }
 
   const tsStr = typeof req.body?.tsStr === 'string' ? req.body.tsStr.trim() : null;
@@ -477,13 +530,19 @@ app.post('/api/undistort', upload.fields([{ name: 'cam1', maxCount: 1 }, { name:
   const requestedProcessName = requestedMode;
   if (tsStr && !forceRecompute) {
     const existing = getLatestArtifact(tsStr, requestedProcessName);
-    if (existing && existing.absPath && fs.existsSync(existing.absPath)) {
+    const cachedCam1 = getInternalUndistortInfo(tsStr, INTERNAL_UNDISTORT_CAM1_LABEL);
+    const cachedCam2 = getInternalUndistortInfo(tsStr, INTERNAL_UNDISTORT_CAM2_LABEL);
+    if (existing && existing.absPath && fs.existsSync(existing.absPath) && cachedCam1 && cachedCam2) {
       return res.json({
         success: true,
         cached: true,
         tsStr,
         process: requestedProcessName,
         url: makeProcessedArtifactUrl(tsStr, requestedProcessName, existing.ext),
+        downloads: {
+          cam1Url: cachedCam1.url,
+          cam2Url: cachedCam2.url,
+        },
         relPath: existing.relPath,
         calibrated: !!(existing.metadata && existing.metadata.calibrated),
       });
@@ -520,12 +579,16 @@ app.post('/api/undistort', upload.fields([{ name: 'cam1', maxCount: 1 }, { name:
   const outPng  = tsStr
     ? path.join(PROCESSED_ROOT, tsStr, buildArtifactFileName(tsStr, requestedProcessName, 'png'))
     : path.join(tmpDir, `${id}_undistort.png`);
-  const out1 = path.join(PROCESSED_ROOT, tsStr, buildArtifactFileName(tsStr, requestedProcessName + "_cam1", 'png'));
-  const out2 = path.join(PROCESSED_ROOT, tsStr, buildArtifactFileName(tsStr, requestedProcessName + "_cam2", 'png'));
+  const out1 = tsStr
+    ? makeInternalUndistortAbsPath(tsStr, INTERNAL_UNDISTORT_CAM1_LABEL)
+    : path.join(tmpDir, `${id}_${INTERNAL_UNDISTORT_CAM1_LABEL}.png`);
+  const out2 = tsStr
+    ? makeInternalUndistortAbsPath(tsStr, INTERNAL_UNDISTORT_CAM2_LABEL)
+    : path.join(tmpDir, `${id}_${INTERNAL_UNDISTORT_CAM2_LABEL}.png`);
 
   const cleanup = () => {
     const tempFiles = [img1, img2];
-    if (!tsStr) tempFiles.push(outPng);
+    if (!tsStr) tempFiles.push(outPng, out1, out2);
     for (const f of tempFiles) {
       try { fs.unlinkSync(f); } catch { /* already gone */ }
     }
@@ -576,9 +639,11 @@ app.post('/api/undistort', upload.fields([{ name: 'cam1', maxCount: 1 }, { name:
     const outFileName = buildArtifactFileName(tsStr, processName, 'png');
     const persistedAbsPath = outPng;
     const relPath = path.relative(__dirname, persistedAbsPath).split(path.sep).join('/');
-    if (!fs.existsSync(persistedAbsPath)) {
+    const internalCam1 = getInternalUndistortInfo(tsStr, INTERNAL_UNDISTORT_CAM1_LABEL);
+    const internalCam2 = getInternalUndistortInfo(tsStr, INTERNAL_UNDISTORT_CAM2_LABEL);
+    if (!fs.existsSync(persistedAbsPath) || !internalCam1 || !internalCam2) {
       cleanup();
-      return res.status(500).json({ error: 'Expected output file missing after processing' });
+      return res.status(500).json({ error: 'Expected undistort output files missing after processing' });
     }
 
     const record = {
@@ -601,15 +666,16 @@ app.post('/api/undistort', upload.fields([{ name: 'cam1', maxCount: 1 }, { name:
       tsStr,
       process: processName,
       url: `/api/processed/${encodeURIComponent(tsStr)}/${encodeURIComponent(outFileName)}`,
+      downloads: {
+        cam1Url: internalCam1.url,
+        cam2Url: internalCam2.url,
+      },
       relPath,
       calibrated: pyOut.calibrated || false,
     });
   }
 
-  let fileName = 'undistorted_preview.png';
-  if (requestedMode === 'undistort_cam1') fileName = 'undistorted_cam1.png';
-  if (requestedMode === 'undistort_cam2') fileName = 'undistorted_cam2.png';
-  res.download(outPng, fileName, (err) => {
+  res.download(outPng, 'undistorted_preview.png', (err) => {
     cleanup();
     if (err && !res.headersSent) res.status(500).json({ error: 'Download failed' });
   });
@@ -704,7 +770,8 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
     return res.status(500).json({ error: 'Failed to write temp files: ' + e.message });
   }
 
-  const args = [DEPTHMAP_PY, img1, img2, outPng];
+  const detectionMasks = tsStr ? findDetectionMasksForTs(tsStr) : [];
+  const args = [DEPTHMAP_PY, img2, img1, JSON.stringify(detectionMasks), path.dirname(outPng)];
   if (fs.existsSync(CALIB_JSON)) args.push(CALIB_JSON);
 
   const result = spawnSync('python3', args, { timeout: 60_000, encoding: 'utf8' });
@@ -728,7 +795,7 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
 
   const outputMode = 'depth';
   console.log(`[depthmap] ${outputMode} (${pyOut.calibrated ? 'calibrated' : 'uncalibrated'}) written to ${outPng}`);
-  
+
   if (tsStr) {
     // Persist output with tsStr-based naming
     const processName = requestedProcessName;
@@ -749,7 +816,10 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
       sourceProcess: null,
       sourceRelPath: null,
       createdAtMs: Date.now(),
-      metadata: { calibrated: pyOut.calibrated || false },
+      metadata: {
+        calibrated: pyOut.calibrated || false,
+        maskCountUsed: detectionMasks.length,
+      },
     };
     registerProcessedArtifact(record);
     cleanup();
@@ -766,11 +836,7 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
   }
 
   // Legacy mode (no tsStr): return blob download
-  let fileName = 'depthmap.png';
-  if (outputMode === 'undistort') fileName = 'undistorted_preview.png';
-  if (outputMode === 'undistort_cam1') fileName = 'undistorted_cam1.png';
-  if (outputMode === 'undistort_cam2') fileName = 'undistorted_cam2.png';
-  res.download(outPng, fileName, (err) => {
+  res.download(outPng, 'depthmap.png', (err) => {
     cleanup();
     if (err && !res.headersSent) res.status(500).json({ error: 'Download failed' });
   });
@@ -847,43 +913,35 @@ app.post('/api/detect', upload.fields([{ name: 'cam1', maxCount: 1 }]), (req, re
     }
   }
 
-  const requestedSource = typeof req.body?.sourceProcess === 'string'
-    ? sanitizeProcess(req.body.sourceProcess)
-    : null;
-
   let inputBuffer = null;
   let resolvedSourceProcess = null;
 
   if (tsStr && !files?.cam1) {
-    // Chain mode: resolve prior artifact from registry.
-    // Detection should run on undistorted imagery, not depth maps.
-    let preferredSource = null;
-    if (requestedSource === 'undistort_cam1' || requestedSource === 'undistort') {
-      preferredSource = requestedSource;
-    } else if (getLatestArtifact(tsStr, 'undistort_cam1')) {
-      preferredSource = 'undistort_cam1';
-    } else if (getLatestArtifact(tsStr, 'undistort')) {
-      preferredSource = 'undistort';
+    // Chain mode: prefer the internal undistorted cam1 output for new runs,
+    // then fall back to legacy indexed artifacts for backward compatibility.
+    const internalCam1 = getInternalUndistortInfo(tsStr, INTERNAL_UNDISTORT_CAM1_LABEL);
+    const legacyCam1Artifact = getLatestArtifact(tsStr, 'undistort_cam1');
+    let sourceAbsPath = internalCam1 ? internalCam1.absPath : null;
+    let sourceRelPath = internalCam1 ? internalCam1.relPath : null;
+
+    if (!sourceAbsPath && legacyCam1Artifact && legacyCam1Artifact.absPath && fs.existsSync(legacyCam1Artifact.absPath)) {
+      sourceAbsPath = legacyCam1Artifact.absPath;
+      sourceRelPath = legacyCam1Artifact.relPath;
     }
 
-    if (!preferredSource) {
+    if (!sourceAbsPath) {
       return res.status(404).json({
-        error: `No undistort artifact found for tsStr=${tsStr}. Run undistort first or upload cam1 directly.`,
+        error: `No undistorted cam1 artifact found for tsStr=${tsStr}. Run undistort first or upload cam1 directly.`,
       });
     }
 
-    const sourceArt = getLatestArtifact(tsStr, preferredSource);
-    if (!sourceArt) {
-      return res.status(404).json({
-        error: `No prior artifact found for tsStr=${tsStr}, process=${preferredSource}. Run ${preferredSource} first or upload cam1 directly.`,
-      });
-    }
     try {
-      inputBuffer = fs.readFileSync(sourceArt.absPath);
+      inputBuffer = fs.readFileSync(sourceAbsPath);
     } catch (e) {
       return res.status(404).json({ error: 'Prior artifact file not found on disk' });
     }
-    resolvedSourceProcess = preferredSource;
+    resolvedSourceProcess = 'undistort';
+    req.resolvedSourceRelPath = sourceRelPath;
   } else {
     if (!files || !files.cam1) {
       return res.status(400).json({ error: 'cam1 file is required' });
@@ -950,7 +1008,6 @@ app.post('/api/detect', upload.fields([{ name: 'cam1', maxCount: 1 }]), (req, re
       return res.status(500).json({ error: 'Expected output file missing after processing' });
     }
 
-    const sourceArtRecord = resolvedSourceProcess ? getLatestArtifact(tsStr, resolvedSourceProcess) : null;
     const record = {
       tsStr,
       process: 'detection',
@@ -958,7 +1015,7 @@ app.post('/api/detect', upload.fields([{ name: 'cam1', maxCount: 1 }]), (req, re
       relPath,
       absPath: persistedAbsPath,
       sourceProcess: resolvedSourceProcess,
-      sourceRelPath: sourceArtRecord ? sourceArtRecord.relPath : null,
+      sourceRelPath: req.resolvedSourceRelPath || null,
       createdAtMs: Date.now(),
       metadata: { detections: pyOut.detections || 0 },
     };
