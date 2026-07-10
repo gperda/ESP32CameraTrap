@@ -94,10 +94,17 @@ def main():
 
     if calib_path and os.path.isfile(calib_path):
         K1, D1, K2, D2, R, T = load_calibration(calib_path)
+        # left_out = np.zeros_like(left_bgr)
+        # right_out = np.zeros_like(right_bgr)
+        # cv2.undistort(left_bgr, K2, D2, left_out)
+        # cv2.undistort(right_bgr, K1, D1, right_out)
+        # cv2.imwrite(out1_path, left_out)
+        # cv2.imwrite(out2_path, right_out)
 
         R1, R2, P1_, P2_, Q, _, _ = cv2.stereoRectify(
             K1, D1, K2, D2, image_size, R, T,
-            flags=cv2.CALIB_ZERO_DISPARITY, alpha=0,
+            flags=cv2.CALIB_ZERO_DISPARITY,
+            alpha=1,
         )
 
         # Persist rectification matrices so triangulation can reuse them.
@@ -118,8 +125,8 @@ def main():
         map1x, map1y = cv2.initUndistortRectifyMap(K1, D1, R1, P1_, image_size, cv2.CV_32FC1)
         map2x, map2y = cv2.initUndistortRectifyMap(K2, D2, R2, P2_, image_size, cv2.CV_32FC1)
 
-        left_out = cv2.remap(left_bgr, map2x, map2y, cv2.INTER_LINEAR)
-        right_out = cv2.remap(right_bgr, map1x, map1y, cv2.INTER_LINEAR)
+        left_out = cv2.remap(left_bgr, map2x, map2y, cv2.INTER_NEAREST)
+        right_out = cv2.remap(right_bgr, map1x, map1y, cv2.INTER_NEAREST)
         calibrated = True
 
         out_img = make_undistort_preview(right_out, left_out)

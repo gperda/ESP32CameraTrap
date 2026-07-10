@@ -30,21 +30,80 @@ import json
 import os
 import numpy as np
 import cv2
+import torch
+import open3d as o3d
+from core.foundation_stereo import FoundationStereo
+from omegaconf import OmegaConf
+from core.utils.utils import InputPadder
 
-# ── SGBM parameters — tune these for your baseline / resolution ──────────────
-MIN_DISPARITY   = 0
-NUM_DISPARITIES = 128     # must be divisible by 16
-BLOCK_SIZE      = 3      # odd, 3–11 recommended
-P1              = 8  * 3 * BLOCK_SIZE ** 2
-P2              = 32 * 3 * BLOCK_SIZE ** 2
-DISP12_MAX_DIFF = 10
-UNIQUENESS_RATIO     = 2
-SPECKLE_WINDOW_SIZE  = 0
-SPECKLE_RANGE        = 0
 
-# Maximum long-edge size to process (resize if larger, for speed)
-MAX_PROCESS_DIM = 2560
+Z_FAR = 3.0 #discard points beyond this distance
+DENOISE_NB_POINTS = 30 #number of points to consider for denoising
+DENOISE_RADIUS = 0.03 #radius for denoising
+VALID_ITERS = 32
+SCALE = 1
+HIERARCHICAL = 1
 
+def vis_disparity(disp, min_val=None, max_val=None, invalid_thres=np.inf, color_map=cv2.COLORMAP_TURBO, cmap=None, other_output={}):
+    """
+    @disp: np array (H,W)
+    @invalid_thres: > thres is invalid
+    """
+    disp = disp.copy()
+    H,W = disp.shape[:2]
+    invalid_mask = disp>=invalid_thres
+    if (invalid_mask==0).sum()==0:
+        other_output['min_val'] = None
+        other_output['max_val'] = None
+        return np.zeros((H,W,3))
+    if min_val is None:
+        min_val = disp[invalid_mask==0].min()
+    if max_val is None:
+        max_val = disp[invalid_mask==0].max()
+    other_output['min_val'] = min_val
+    other_output['max_val'] = max_val
+    vis = ((disp-min_val)/(max_val-min_val)).clip(0,1) * 255
+    if cmap is None:
+        vis = cv2.applyColorMap(vis.clip(0, 255).astype(np.uint8), color_map)[...,::-1]
+    else:
+        vis = cmap(vis.astype(np.uint8))[...,:3]*255
+    if invalid_mask.any():
+        vis[invalid_mask] = 0
+    return vis.astype(np.uint8)
+
+def toOpen3dCloud(points,colors=None,normals=None):
+    cloud = o3d.geometry.PointCloud()
+    cloud.points = o3d.utility.Vector3dVector(points.astype(np.float64))
+    if colors is not None:
+        if colors.max()>1:
+            colors = colors/255.0
+        cloud.colors = o3d.utility.Vector3dVector(colors.astype(np.float64))
+    if normals is not None:
+        cloud.normals = o3d.utility.Vector3dVector(normals.astype(np.float64))
+    return cloud
+
+
+def depth2xyzmap(depth:np.ndarray, K, uvs:np.ndarray=None, zmin=0.1, mask = None):
+    #invalid_mask = (depth<zmin)
+    invalid_mask = (mask==0)
+    H,W = depth.shape[:2]
+    if uvs is None:
+        vs,us = np.meshgrid(np.arange(0,H),np.arange(0,W), sparse=False, indexing='ij')
+        vs = vs.reshape(-1)
+        us = us.reshape(-1)
+    else:
+        uvs = uvs.round().astype(int)
+        us = uvs[:,0]
+        vs = uvs[:,1]
+    zs = depth[vs,us]
+    xs = (us-(-K[0,3]))*zs/K[2,3]
+    ys = (vs-(-K[1,3]))*zs/K[2,3]
+    pts = np.stack((xs.reshape(-1),ys.reshape(-1),zs.reshape(-1)), 1)  #(N,3)
+    xyz_map = np.zeros((H,W,3), dtype=np.float32)
+    xyz_map[vs,us] = pts
+    if invalid_mask.any():
+        xyz_map[invalid_mask] = 0
+    return xyz_map
 
 def fail(msg: str) -> None:
     print(json.dumps({"success": False, "error": msg}), flush=True)
@@ -59,21 +118,15 @@ def load_calibration(path: str):
     with open(path) as f:
         c = json.load(f)
 
-    required = ("K1", "D1", "K2", "D2", "baseline")
+    required = ("Q", "baseline")
     for key in required:
         if key not in c:
             fail(f"calibration.json missing required key: '{key}'")
 
-    K1 = np.array(c["K1"], dtype=np.float64)
-    D1 = np.array(c["D1"], dtype=np.float64)
-    K2 = np.array(c["K2"], dtype=np.float64)
-    D2 = np.array(c["D2"], dtype=np.float64)
-    baseline = float(c["baseline"])
+    Q = np.array(c["Q"], dtype=np.float64)
+    baseline = float(c["baseline"])/1000.0
 
-    R = np.array(c["R"], dtype=np.float64) if "R" in c else np.eye(3, dtype=np.float64)
-    T = np.array(c["T"], dtype=np.float64) if "T" in c else np.array([baseline, 0.0, 0.0])
-
-    return K1, D1, K2, D2, R, T
+    return Q, baseline
 
 
 def scale_to_max(img, max_dim: int):
@@ -87,135 +140,124 @@ def scale_to_max(img, max_dim: int):
     return cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA), scale
 
 
-def compute_disparity(left_gray, right_gray):
-    sgbm = cv2.StereoSGBM_create(
-        minDisparity       = MIN_DISPARITY,
-        numDisparities     = NUM_DISPARITIES,
-        blockSize          = BLOCK_SIZE,
-        P1                 = P1,
-        P2                 = P2,
-        disp12MaxDiff      = DISP12_MAX_DIFF,
-        uniquenessRatio    = UNIQUENESS_RATIO,
-        speckleWindowSize  = SPECKLE_WINDOW_SIZE,
-        speckleRange       = SPECKLE_RANGE,
-        mode               = cv2.STEREO_SGBM_MODE_HH,
-    )
-    return sgbm.compute(left_gray, right_gray)
+def load_detection_masks(raw: str):
+    """Parse detection masks JSON argument into a list of mask paths."""
+    if raw is None:
+        return []
 
+    text = str(raw).strip()
+    if not text:
+        return []
 
-def colorize_disparity(disp16):
-    """
-    Normalize a fixed-point disparity map (16-bit, scale factor 16) to [0,255]
-    and apply COLORMAP_TURBO. Invalid pixels (< 0) are rendered black.
-    """
-    valid_mask = disp16 > 0
-    disp_float = disp16.astype(np.float32) / 16.0
+    try:
+        parsed = json.loads(text)
+    except Exception as e:
+        fail(f"Failed to parse detection masks JSON: {e}")
 
-    if valid_mask.any():
-        vmin = disp_float[valid_mask].min()
-        vmax = disp_float[valid_mask].max()
-    else:
-        vmin, vmax = 0.0, 1.0
+    if not isinstance(parsed, list):
+        fail("detection_masks must be a JSON array")
 
-    norm = np.zeros_like(disp_float, dtype=np.uint8)
-    if vmax > vmin:
-        norm[valid_mask] = np.clip(
-            (disp_float[valid_mask] - vmin) / (vmax - vmin) * 255, 0, 255
-        ).astype(np.uint8)
-
-    colored = cv2.applyColorMap(norm, cv2.COLORMAP_TURBO)
-    colored[~valid_mask] = (10, 10, 10)   # near-black for invalid zones
-    return colored
+    masks = []
+    for entry in parsed:
+        if entry is None:
+            continue
+        path_str = str(entry).strip()
+        if not path_str:
+            continue
+        masks.append(path_str)
+    return masks
 
 
 def main():
-    if len(sys.argv) < 4:
-        fail("Usage: depthmap.py <img1> <img2> <outpath> [<calib_json>]")
+    if len(sys.argv) < 5:
+        fail("Usage: depthmap.py <left_img> <right_img> <detection_masks_json> <out_path> [<calib_json>]")
+
+    foundation_path = os.environ.get('PYTHONPATH')
+    torch.autograd.set_grad_enabled(False)
+
+    ckpt_dir = os.path.join(foundation_path, 'pretrained_models/23-51-11/model_best_bp2.pth')
+    cfg = OmegaConf.load(f'{os.path.dirname(ckpt_dir)}/cfg.yaml')
+    if 'vit_size' not in cfg:
+        cfg['vit_size'] = 'vitl'
+    for k in range(0, len(sys.argv)):
+        cfg[k] = sys.argv[k]
+    args = OmegaConf.create(cfg)
+
+    model = FoundationStereo(args)
+    ckpt = torch.load(ckpt_dir, weights_only=False)
+    model.load_state_dict(ckpt['model'])
+    model.cuda()
+    model.eval()
 
     left_path   = sys.argv[1]
     right_path   = sys.argv[2]
-    out_path    = sys.argv[3]
-    calib_path  = sys.argv[4] if len(sys.argv) >= 5 else None
+    detection_masks = load_detection_masks(sys.argv[3])
+    print(json.dumps({"success": True, "detection_masks": detection_masks}), flush=True)
+    out_path    = sys.argv[4]
+    calib_path  = sys.argv[5] if len(sys.argv) > 5 else None
+
     # ── Load images ───────────────────────────────────────────────────────────
     left_bgr  = cv2.imread(left_path)
     right_bgr = cv2.imread(right_path)
+    if SCALE <1:
+        left_bgr = cv2.resize(left_bgr, fx=SCALE, fy=SCALE, dsize=None)
+        right_bgr = cv2.resize(right_bgr, fx=SCALE, fy=SCALE, dsize=None)
+    left_ori = left_bgr.copy()
+
     if left_bgr is None:
         fail(f"Could not read cam1 image: {left_path}")
     if right_bgr is None:
         fail(f"Could not read cam2 image: {right_path}")
 
-    # # Resize both to the same (smaller) resolution for speed
-    # left_bgr,  scale = scale_to_max(left_bgr,  MAX_PROCESS_DIM)
-    # right_bgr, _     = scale_to_max(right_bgr, MAX_PROCESS_DIM)
-    scale = 1.0
+    H,W = left_bgr.shape[:2]
+    left = torch.as_tensor(left_bgr).cuda().float()[None].permute(0,3,1,2)
+    right = torch.as_tensor(right_bgr).cuda().float()[None].permute(0,3,1,2)
+    padder = InputPadder(left.shape, divis_by=32, force_square=False)
+    left, right = padder.pad(left, right)
 
-    # Ensure same size (crop/pad if cameras have slightly different aspect)
-    h = min(left_bgr.shape[0], right_bgr.shape[0])
-    w = min(left_bgr.shape[1], right_bgr.shape[1])
-    left_bgr  = left_bgr[:h, :w]
-    right_bgr = right_bgr[:h, :w]
+    if calib_path is None:
+        fail("calibration.json path is required")
+    Q, baseline = load_calibration(calib_path)
 
-    image_size = (w, h)
+    with torch.cuda.amp.autocast(True):
+        if not HIERARCHICAL:
+            disp = model.forward(left, right, iters=VALID_ITERS, test_mode=True)
+        else:
+            disp = model.run_hierachical(left, right, iters=VALID_ITERS, test_mode=True, small_ratio=0.5)
+        disp = padder.unpad(disp.float())
+        disp = disp.data.cpu().numpy().reshape(H,W)
+        vis = vis_disparity(disp)
+        vis = np.concatenate([left_ori, vis], axis=1)
 
-    # ── Calibrated path ───────────────────────────────────────────────────────
-    if calib_path and os.path.isfile(calib_path):
-        K1, D1, K2, D2, R, T = load_calibration(calib_path)
+    # remove invisible pixels
+    yy,xx = np.meshgrid(np.arange(disp.shape[0]), np.arange(disp.shape[1]), indexing='ij')
+    us_right = xx-disp
+    invalid = us_right<0
+    disp[invalid] = np.inf
 
-        # Scale camera matrices to match the (possibly) downsampled resolution
-        K1 = K1.copy(); K1[0] *= scale; K1[1] *= scale
-        K2 = K2.copy(); K2[0] *= scale; K2[1] *= scale
+    Q[:3,3] *= SCALE
+    depth = Q[2,3]*baseline/disp
 
-        R1, R2, P1_, P2_, Q, _, _ = cv2.stereoRectify(
-            K1, D1, K2, D2, image_size, R, T,
-            flags=cv2.CALIB_ZERO_DISPARITY, alpha=0,
-        )
+    if detection_masks:
+        for i, mask_path in enumerate(detection_masks):
+            mask = cv2.imread(mask_path)
+            if SCALE <1:
+                mask = cv2.resize(mask, fx=SCALE, fy=SCALE, dsize=None)
+            xyz_map = depth2xyzmap(depth, Q, mask = mask)
+            pcd = toOpen3dCloud(xyz_map.reshape(-1,3), left_ori.reshape(-1,3))
+            keep_mask = (np.asarray(pcd.points)[:,2]>0) & (np.asarray(pcd.points)[:,2]<=Z_FAR)
+            keep_ids = np.arange(len(np.asarray(pcd.points)))[keep_mask]
+            pcd = pcd.select_by_index(keep_ids)
+            print(json.dumps({"success": True, "mask_index": i, "point_count": len(np.asarray(pcd.points))}), flush=True)
+    
+            # # denoise point cloud TODO: denoising sends timeout
+            # cl, ind = pcd.remove_radius_outlier(nb_points=30, radius=1.0)
+            # inlier_cloud = pcd.select_by_index(ind)
+            o3d.io.write_point_cloud(f'{out_path}_cloud_{i}_.ply', pcd)
+            # pcd = inlier_cloud
 
-        # Persist rectification matrices to calibration.json so triangulation.py
-        # can load them directly without recomputing stereoRectify.
-        try:
-            with open(calib_path) as _f:
-                _calib_data = json.load(_f)
-            _calib_data["R1"] = R1.tolist()
-            _calib_data["R2"] = R2.tolist()
-            _calib_data["P1"] = P1_.tolist()
-            _calib_data["P2"] = P2_.tolist()
-            _calib_data["image_size"] = list(image_size)
-            with open(calib_path, "w") as _f:
-                json.dump(_calib_data, _f, indent=2)
-        except Exception:
-            pass  # Non-fatal: rectification proceeds even if write fails
-
-        map1x, map1y = cv2.initUndistortRectifyMap(K1, D1, R1, P1_, image_size, cv2.CV_32FC1)
-        map2x, map2y = cv2.initUndistortRectifyMap(K2, D2, R2, P2_, image_size, cv2.CV_32FC1)
-
-        left_rect  = cv2.remap(left_bgr,  map2x, map2y, cv2.INTER_LINEAR)
-        right_rect = cv2.remap(right_bgr, map1x, map1y, cv2.INTER_LINEAR)
-
-        left_gray  = cv2.cvtColor(left_rect,  cv2.COLOR_BGR2GRAY)
-        right_gray = cv2.cvtColor(right_rect, cv2.COLOR_BGR2GRAY)
-        calibrated = True
-
-    # ── Uncalibrated path ─────────────────────────────────────────────────────
-    else:
-        left_gray  = cv2.cvtColor(left_bgr,  cv2.COLOR_BGR2GRAY)
-        right_gray = cv2.cvtColor(right_bgr, cv2.COLOR_BGR2GRAY)
-        calibrated = False
-
-    # ── Compute disparity ─────────────────────────────────────────────────
-    disp16 = compute_disparity(left_gray, right_gray)
-
-    # ── Colorize and save ─────────────────────────────────────────────────
-    out_img = colorize_disparity(disp16)
-
-    # Annotate processing mode and calibration state
-    state_label = "calibrated" if calibrated else "uncalibrated"
-    # cv2.putText(
-    #     out_img, f"{mode_label} · {state_label}", (8, out_img.shape[0] - 8),
-    #     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA,
-    # )
-
-    cv2.imwrite(out_path, out_img)
-    print(json.dumps({"success": True, "calibrated": calibrated, "mode": "depth", "size": image_size}), flush=True)
+    cv2.imwrite(f'{out_path}_depthmap.png', disp)
+    print(json.dumps({"success": True, }), flush=True)
     sys.exit(0)
 
 

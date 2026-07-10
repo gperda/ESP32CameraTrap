@@ -26,6 +26,9 @@ const app    = express();
 app.set('trust proxy', 1);
 const REGISTER_TOKEN = process.env.REGISTER_TOKEN;
 const DATA_ROOT = process.env.DATA_ROOT;
+const FOUNDATION_STEREO_PATH = process.env.FOUNDATION_STEREO_PATH;
+const CONDA_EXE = process.env.CONDA_EXE || 'conda';
+const FOUNDATION_STEREO_CONDA_ENV = process.env.FOUNDATION_STEREO_CONDA_ENV || 'foundation_stereo';
 const server = http.createServer(app);
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -771,17 +774,32 @@ app.post('/api/depthmap', upload.fields([{ name: 'cam1', maxCount: 1 }, { name: 
   }
 
   const detectionMasks = tsStr ? findDetectionMasksForTs(tsStr) : [];
-  const args = [DEPTHMAP_PY, img2, img1, JSON.stringify(detectionMasks), path.dirname(outPng)];
+  const args = [DEPTHMAP_PY, img2, img1, JSON.stringify(detectionMasks), outPng.split('.')[0]];
+  //const scriptArgs = [DEPTHMAP_PY, img2, img1, JSON.stringify(detectionMasks), path.dirname(outPng)];
   if (fs.existsSync(CALIB_JSON)) args.push(CALIB_JSON);
 
-  const result = spawnSync('python3', args, { timeout: 60_000, encoding: 'utf8' });
+  //const args = ['run', '-n', FOUNDATION_STEREO_CONDA_ENV, 'python', ...scriptArgs];
+
+  // const result = spawnSync('CONDA_EXE', args, {
+  //   timeout: 60_000,
+  //   encoding: 'utf8',
+  //   env: {
+  //     ...process.env,
+  //     PYTHONPATH: FOUNDATION_STEREO_PATH,
+  //   },
+  // });
+  const result = spawnSync('python3', args, { timeout: 540_000, encoding: 'utf8', env: {...process.env, PYTHONPATH: FOUNDATION_STEREO_PATH}});
+
 
   if (result.error) {
     cleanup();
-    return res.status(500).json({ error: 'Failed to spawn python3: ' + result.error.message });
+    return res.status(500).json({
+      error: `Failed to spawn depthmap process: ${result.error.message}`,
+    });
   }
 
   const pyOut = parseJsonFromStdout(result.stdout) || {};
+  console.log(result);
 
   if (result.status !== 0 || !pyOut.success) {
     cleanup();

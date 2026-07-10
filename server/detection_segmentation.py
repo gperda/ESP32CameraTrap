@@ -78,7 +78,7 @@ def main():
 
         inputs = processor(
             images=image,
-            text="animal",
+            text="person",
             input_boxes=sam_boxes,
             input_boxes_labels=[np.array([1] * len(sam_boxes[0]))],
             return_tensors="pt"
