@@ -30,27 +30,10 @@
 #define MOTIONSENSOR_PIN          GPIO_NUM_14
 #define TO_SLAVE_PIN              GPIO_NUM_45
 
-#define TOF_SENSOR_PIN            GPIO_NUM_20
-#define TOF_SENSOR_INTERRUPT_PIN  GPIO_NUM_21
-#define TOF_SDA_PIN               GPIO_NUM_41
-#define TOF_SCL_PIN               GPIO_NUM_42
-
-#define TOF_SENSOR_WAIT_TIME_S    30
-#define TOF_SENSOR_WAIT_TIME_US TOF_SENSOR_WAIT_TIME_S * uS_TO_S_FACTOR
-#define TOF_I2C_SPEED             1000000 // 1 MHz
-#define TOF_RANGING_FREQ_HZ       15
-#define TOF_ZONES                 16      
-
-#define THRESHOLD_DISTANCE_MM_LOW  1000
-#define THRESHOLD_DISTANCE_MM_HIGH 1600
-#define THRESHOLD_DETECTION_MIN_NUMBER_OF_ZONES 6
-#define THRESHOLD_MOTION_MAX_ZONES 4
-#define THRESHOLD_MOTION_MAX_TOTAL 20 * 16
-
 #define MAX_WIFI_WAIT_TIME_MS     6000
 #define MAX_WS_WAIT_TIME_MS       4000
 #define WAKEUP_TIMER_SECONDS      10
-
+#define LISTEN_WAIT_TIME_US       10 * uS_TO_S_FACTOR
 #define SYNC_TIME_EVERY_N_CONNECTIONS   20
 
 #ifndef CF_ACCESS_CLIENT_ID
@@ -102,10 +85,6 @@ bool motionDetected = false;
 
 static uint8_t* g_sendBuf = nullptr;
 
-// ── ToF globals ──────────────────────────────────────────────────────────────
-// SparkFun_VL53L5CX tofSensor;
-Adafruit_VL53L5CX tofSensor;
-VL53L5CX_ResultsData tofData;
 
 // =================== ESP-NOW COMMUNICATION ================
 uint8_t slaveMAC[] = {0xD0, 0xCF, 0x13, 0x26, 0xE0, 0x6C};
@@ -133,51 +112,6 @@ RTC_DATA_ATTR int wakeCount = 0;
 
 volatile bool timeSynced = false;
 
-// =================== ToF helpers ===================
-
-// ── Initialise the VL53L5CX once per wake cycle ─────────────────────────────
-bool initToF() {
-  Wire.begin(TOF_SDA_PIN, TOF_SCL_PIN);
-  Wire.setClock(TOF_I2C_SPEED);
-
-  if (!tofSensor.begin(VL53L5CX_DEFAULT_ADDRESS, &Wire, TOF_I2C_SPEED)) {
-    Serial.println("[ToF] Sensor not found — check wiring");
-    return false;
-  }
-  //tofSensor.setPowerMode();
-  tofSensor.setResolution(TOF_ZONES);
-  tofSensor.setRangingFrequency(TOF_RANGING_FREQ_HZ);
-  tofSensor.setRangingMode(VL53L5CX_RANGING_MODE_AUTONOMOUS);
-
-  tofSensor.stopRanging();
-  if(!tofSensor.initMotionIndicator(TOF_ZONES)) Serial.println("Failed to init motion");
-  if(!tofSensor.setMotionDistance(THRESHOLD_DISTANCE_MM_LOW, THRESHOLD_DISTANCE_MM_HIGH)) Serial.println("Failed to set motion distance");
-
-  VL53L5CX_DetectionThresholds thresholds[TOF_ZONES];
-  memset(thresholds, 0, sizeof(thresholds));
-
-  Serial.println(F("Configuring detection thresholds..."));
-
-  for (uint8_t zone = 0; zone < TOF_ZONES; zone++) {
-    thresholds[zone].zone_num = zone;
-    thresholds[zone].measurement = VL53L5CX_DISTANCE_MM;
-    thresholds[zone].type = VL53L5CX_IN_WINDOW;
-    thresholds[zone].param_low_thresh = THRESHOLD_DISTANCE_MM_LOW;
-    thresholds[zone].param_high_thresh = THRESHOLD_DISTANCE_MM_HIGH;
-    thresholds[zone].mathematic_operation = VL53L5CX_OPERATION_OR;
-  }
-
-  // Mark end of threshold list
-  thresholds[TOF_ZONES-1].zone_num = VL53L5CX_LAST_THRESHOLD;
-
-  if(!tofSensor.setDetectionThresholds(thresholds)) Serial.println("Failed to set thresh");
-  if(!tofSensor.setDetectionThresholdsEnable(true)) Serial.println("Failed to enable thresh");
-
-  tofSensor.startRanging();
-  Serial.printf("[ToF] Ranging started at %d Hz\n", TOF_RANGING_FREQ_HZ);
-  delay(100);
-  return true;
-}
 
 // =================== Camera ===================
 int initCamera(void) {
@@ -581,36 +515,6 @@ bool performOTAIfAvailable() {
   return ::performOTAIfAvailable(FIRMWARE_DEVICE, FIRMWARE_VERSION, GITHUB_REPO, &isUpToDate);
 }
 
-bool checkHighMotion(const VL53L5CX_ResultsData results){
-  // uint8_t triggerCount = 0;
-
-  // for (uint8_t zone = 0; zone < TOF_ZONES; zone++) {
-  //   int16_t distance = results.distance_mm[zone];
-  //   if (distance >= THRESHOLD_DISTANCE_MM_LOW && distance <= THRESHOLD_DISTANCE_MM_HIGH) {
-  //       Serial.println();
-  //       Serial.print("Positive trigger in zones: ");
-  //       Serial.print(triggerCount);
-  //       Serial.println();
-  //       triggerCount++;
-  //   }
-  // }
-  if (results.motion_indicator.nb_of_detected_aggregates >= THRESHOLD_MOTION_MAX_ZONES) {
-    return true;
-  }
-
-  uint32_t totalMotion = 0;
-  for (uint8_t idx = 0; idx < TOF_ZONES; idx++) {
-    totalMotion += results.motion_indicator.motion[idx];
-    if (totalMotion > THRESHOLD_MOTION_MAX_TOTAL) {
-      Serial.print("Too high motion: ");
-      Serial.print(totalMotion);
-      Serial.println();
-      return true; // highMotion
-    }
-  }
-
-  return false;
-}
 
 void saveToFdump(String file, VL53L5CX_ResultsData data, bool motion){
 
@@ -698,16 +602,6 @@ void onTofInt(){
   }
 }
 
-void powerOffToF(){
-  digitalWrite(TOF_SENSOR_PIN, HIGH);
-  gpio_hold_en(TOF_SENSOR_PIN);
-}
-
-void powerOnToF(){
-  gpio_hold_dis(TOF_SENSOR_PIN);
-  digitalWrite(TOF_SENSOR_PIN, LOW);
-}
-
 // =================== Arduino Setup ===================
 void setup() {
   Serial.begin(115200);
@@ -715,12 +609,8 @@ void setup() {
 
   pinMode(TO_SLAVE_PIN, OUTPUT);
   digitalWrite(TO_SLAVE_PIN, LOW);
-  //pinMode(TOF_SENSOR_PIN, OUTPUT);
-  //powerOffToF();
-  pinMode(TOF_SENSOR_INTERRUPT_PIN, INPUT_PULLUP);
 
   sdmmcInit();
-  createDir(SD_MMC, "/tofdumps");
   initEspNow();
   ws2812Init();
   ws2812SetColor(2);
@@ -767,9 +657,6 @@ void setup() {
         deleteFile(SD_MMC, "/sendlist.txt");
         removeDirRecursive(SD_MMC, "/camera");
       }
-
-      // Send queued ToF JSON files with per-file headers containing file names.
-      sendPendingTofDumpsFromSD();
     } else {
       Serial.println("WiFi currently unavailable, will send later");
     }
@@ -793,11 +680,7 @@ void setup() {
   } else if (cause == ESP_SLEEP_WAKEUP_EXT1){
     uint64_t status = esp_sleep_get_ext1_wakeup_status();
     if (status & (1ULL << MOTIONSENSOR_PIN)) {
-        Serial.println("Woke up from motion sensor INT");
-
-        // Tof always on
-        //powerOnToF();
-        if (initToF()){
+        Serial.println("Woke up from motion sensor");
 
           initCamera();
           createDir(SD_MMC, "/camera");
@@ -805,14 +688,29 @@ void setup() {
           uint64_t startTime   = esp_timer_get_time();
           uint64_t elapsedTime = 0;
           int i = 0;
-          while(elapsedTime < TOF_SENSOR_WAIT_TIME_US){
-            if(digitalRead(TOF_SENSOR_INTERRUPT_PIN) == LOW)
-              onTofInt();
+          while(elapsedTime < LISTEN_WAIT_TIME_US){
+            wakeSlave();
+
+            SyncPacket pkt;
+            pkt.type         = 0x01;
+            // pkt.timestamp_us = esp_timer_get_time();
+            pkt.timestamp_ms = getEpochMillis();
+            ackReceived = false;
+            slaveReady  = false;
+            Serial.print("Slave capture signal: ");
+            Serial.println(esp_now_send(slaveMAC, (uint8_t*)&pkt, sizeof(pkt)));
+
+            unsigned long t = millis();
+            while (!(ackReceived && slaveReady) && millis() - t < 2000);
+
+            if (!ackReceived || !slaveReady) {
+              Serial.println("No ACK from slave, aborting");
+              //goToSleep();
+            }
             elapsedTime = esp_timer_get_time() - startTime;
+            delay(1000);
           }
-          //powerOffToF();
         }
-        tofSensor.stopRanging();
         goToSleep();
     }
   } else Serial.println("Cold boot");
