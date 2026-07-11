@@ -29,6 +29,7 @@
 
 #define MOTIONSENSOR_PIN          GPIO_NUM_14
 #define TO_SLAVE_PIN              GPIO_NUM_45
+#define AFTER_MOTIONSENSOR_DELAY_MS 1000
 
 #define MAX_WIFI_WAIT_TIME_MS     6000
 #define MAX_WS_WAIT_TIME_MS       4000
@@ -372,77 +373,77 @@ String basenameFromPath(const String& path) {
   return path.substring(slashPos + 1);
 }
 
-bool sendTofDumpFromSD(const String& path) {
-  File file = SD_MMC.open(path);
-  if (!file) {
-    Serial.println("Failed to open ToF dump: " + path);
-    return false;
-  }
+// bool sendTofDumpFromSD(const String& path) {
+//   File file = SD_MMC.open(path);
+//   if (!file) {
+//     Serial.println("Failed to open ToF dump: " + path);
+//     return false;
+//   }
 
-  size_t fileSize = file.size();
-  if (fileSize == 0 || fileSize > 4096) {
-    Serial.printf("Invalid ToF dump size (%u) for %s\n", fileSize, path.c_str());
-    file.close();
-    return false;
-  }
+//   size_t fileSize = file.size();
+//   if (fileSize == 0 || fileSize > 4096) {
+//     Serial.printf("Invalid ToF dump size (%u) for %s\n", fileSize, path.c_str());
+//     file.close();
+//     return false;
+//   }
 
-  String payload = file.readString();
-  file.close();
-  payload.trim();
-  if (payload.length() == 0) {
-    Serial.println("Empty ToF dump payload: " + path);
-    return false;
-  }
+//   String payload = file.readString();
+//   file.close();
+//   payload.trim();
+//   if (payload.length() == 0) {
+//     Serial.println("Empty ToF dump payload: " + path);
+//     return false;
+//   }
 
-  if (!client.isConnected()) {
-    Serial.println("WS not available, skipping ToF dump send");
-    return false;
-  }
+//   if (!client.isConnected()) {
+//     Serial.println("WS not available, skipping ToF dump send");
+//     return false;
+//   }
 
-  String fileName = basenameFromPath(path);
-  String header = "tofdump:" + fileName;
-  client.sendTXT(header);
-  client.sendTXT(payload);
+//   String fileName = basenameFromPath(path);
+//   String header = "tofdump:" + fileName;
+//   client.sendTXT(header);
+//   client.sendTXT(payload);
 
-  Serial.printf("ToF dump sent: %s (%u B)\n", fileName.c_str(), fileSize);
-  return true;
-}
+//   Serial.printf("ToF dump sent: %s (%u B)\n", fileName.c_str(), fileSize);
+//   return true;
+// }
 
-void sendPendingTofDumpsFromSD() {
-  File dir = SD_MMC.open("/tofdumps");
-  if (!dir || !dir.isDirectory()) {
-    Serial.println("ToF dump directory unavailable");
-    if (dir) dir.close();
-    return;
-  }
+// void sendPendingTofDumpsFromSD() {
+//   File dir = SD_MMC.open("/tofdumps");
+//   if (!dir || !dir.isDirectory()) {
+//     Serial.println("ToF dump directory unavailable");
+//     if (dir) dir.close();
+//     return;
+//   }
 
-  File entry = dir.openNextFile();
-  while (entry) {
-    if (entry.isDirectory()) {
-      entry = dir.openNextFile();
-      continue;
-    }
+//   File entry = dir.openNextFile();
+//   while (entry) {
+//     if (entry.isDirectory()) {
+//       entry = dir.openNextFile();
+//       continue;
+//     }
 
-    String filePath = String(entry.path());
-    entry.close();
+//     String filePath = String(entry.path());
+//     entry.close();
 
-    if (!filePath.endsWith(".json")) {
-      entry = dir.openNextFile();
-      continue;
-    }
+//     if (!filePath.endsWith(".json")) {
+//       entry = dir.openNextFile();
+//       continue;
+//     }
 
-    bool sent = sendTofDumpFromSD(filePath);
-    if (sent) {
-      deleteFile(SD_MMC, filePath.c_str());
-    }
+//     bool sent = sendTofDumpFromSD(filePath);
+//     if (sent) {
+//       deleteFile(SD_MMC, filePath.c_str());
+//     }
 
-    client.loop();
-    delay(10);
-    entry = dir.openNextFile();
-  }
+//     client.loop();
+//     delay(10);
+//     entry = dir.openNextFile();
+//   }
 
-  dir.close();
-}
+//   dir.close();
+// }
 
 
 // =================== Capture → SD ===================
@@ -516,91 +517,59 @@ bool performOTAIfAvailable() {
 }
 
 
-void saveToFdump(String file, VL53L5CX_ResultsData data, bool motion){
+// void saveToFdump(String file, VL53L5CX_ResultsData data, bool motion){
 
-  char jsonBuffer[1024];
-  size_t offset = 0;
+//   char jsonBuffer[1024];
+//   size_t offset = 0;
 
-  offset += snprintf(jsonBuffer + offset, sizeof(jsonBuffer) - offset, "{\"distances\":[");
-  for (int i = 0; i < TOF_ZONES && offset < sizeof(jsonBuffer); i++) {
-    offset += snprintf(
-      jsonBuffer + offset,
-      sizeof(jsonBuffer) - offset,
-      (i < TOF_ZONES - 1) ? "%d," : "%d",
-      data.distance_mm[i]
-    );
-  }
+//   offset += snprintf(jsonBuffer + offset, sizeof(jsonBuffer) - offset, "{\"distances\":[");
+//   for (int i = 0; i < TOF_ZONES && offset < sizeof(jsonBuffer); i++) {
+//     offset += snprintf(
+//       jsonBuffer + offset,
+//       sizeof(jsonBuffer) - offset,
+//       (i < TOF_ZONES - 1) ? "%d," : "%d",
+//       data.distance_mm[i]
+//     );
+//   }
 
-  offset += snprintf(jsonBuffer + offset, sizeof(jsonBuffer) - offset, "],\"motion\":[");
-  for (int i = 0; i < TOF_ZONES && offset < sizeof(jsonBuffer); i++) {
-    offset += snprintf(
-      jsonBuffer + offset,
-      sizeof(jsonBuffer) - offset,
-      (i < TOF_ZONES - 1) ? "%u," : "%u",
-      data.motion_indicator.motion[i]
-    );
-  }
+//   offset += snprintf(jsonBuffer + offset, sizeof(jsonBuffer) - offset, "],\"motion\":[");
+//   for (int i = 0; i < TOF_ZONES && offset < sizeof(jsonBuffer); i++) {
+//     offset += snprintf(
+//       jsonBuffer + offset,
+//       sizeof(jsonBuffer) - offset,
+//       (i < TOF_ZONES - 1) ? "%u," : "%u",
+//       data.motion_indicator.motion[i]
+//     );
+//   }
 
-  offset += snprintf(
-    jsonBuffer + offset,
-    sizeof(jsonBuffer) - offset,
-    "],\"motionZones\":[%u],\"status\":[",
-    data.motion_indicator.nb_of_detected_aggregates
-  );
+//   offset += snprintf(
+//     jsonBuffer + offset,
+//     sizeof(jsonBuffer) - offset,
+//     "],\"motionZones\":[%u],\"status\":[",
+//     data.motion_indicator.nb_of_detected_aggregates
+//   );
 
-  for (int i = 0; i < TOF_ZONES && offset < sizeof(jsonBuffer); i++) {
-    offset += snprintf(
-      jsonBuffer + offset,
-      sizeof(jsonBuffer) - offset,
-      (i < TOF_ZONES - 1) ? "%u," : "%u",
-      data.target_status[i]
-    );
-  }
+//   for (int i = 0; i < TOF_ZONES && offset < sizeof(jsonBuffer); i++) {
+//     offset += snprintf(
+//       jsonBuffer + offset,
+//       sizeof(jsonBuffer) - offset,
+//       (i < TOF_ZONES - 1) ? "%u," : "%u",
+//       data.target_status[i]
+//     );
+//   }
 
-  offset += snprintf(
-    jsonBuffer + offset,
-    sizeof(jsonBuffer) - offset,
-    "],\"highMotion\":%s}",
-    motion ? "true" : "false"
-  );
+//   offset += snprintf(
+//     jsonBuffer + offset,
+//     sizeof(jsonBuffer) - offset,
+//     "],\"highMotion\":%s}",
+//     motion ? "true" : "false"
+//   );
   
-  writeFile(SD_MMC, file.c_str(), jsonBuffer);
+//   writeFile(SD_MMC, file.c_str(), jsonBuffer);
   
-}
+// }
 
-void onTofInt(){
-  if(tofSensor.getRangingData(&tofData)){
-    Serial.println(tofData.distance_mm[0]);
-    bool motion =checkHighMotion(tofData);
-    if(!motion){
-      wakeSlave();
-
-      SyncPacket pkt;
-      pkt.type         = 0x01;
-      // pkt.timestamp_us = esp_timer_get_time();
-      pkt.timestamp_ms = getEpochMillis();
-      ackReceived = false;
-      slaveReady  = false;
-      Serial.print("Slave capture signal: ");
-      Serial.println(esp_now_send(slaveMAC, (uint8_t*)&pkt, sizeof(pkt)));
-
-      unsigned long t = millis();
-      while (!(ackReceived && slaveReady) && millis() - t < 2000);
-
-      if (!ackReceived || !slaveReady) {
-        Serial.println("No ACK from slave, aborting");
-        goToSleep();
-      }
-
-      if (captureToSD(pkt.timestamp_ms) == 0)
-        Serial.println("Error with capture");
-      else{
-        saveToFdump("/tofdumps/" + String(pkt.timestamp_ms) + ".json", tofData, motion);
-      }
-    }
-
-  }
-}
+// v
 
 // =================== Arduino Setup ===================
 void setup() {
@@ -698,6 +667,8 @@ void setup() {
             ackReceived = false;
             slaveReady  = false;
             Serial.print("Slave capture signal: ");
+
+            delay(AFTER_MOTIONSENSOR_DELAY_MS);
             Serial.println(esp_now_send(slaveMAC, (uint8_t*)&pkt, sizeof(pkt)));
 
             unsigned long t = millis();
@@ -710,7 +681,6 @@ void setup() {
             elapsedTime = esp_timer_get_time() - startTime;
             delay(1000);
           }
-        }
         goToSleep();
     }
   } else Serial.println("Cold boot");
