@@ -41,8 +41,8 @@
 #define TOF_RANGING_FREQ_HZ       15
 #define TOF_ZONES                 16      
 
-#define THRESHOLD_DISTANCE_MM_LOW  200
-#define THRESHOLD_DISTANCE_MM_HIGH 500
+#define THRESHOLD_DISTANCE_MM_LOW  1000
+#define THRESHOLD_DISTANCE_MM_HIGH 1600
 #define THRESHOLD_DETECTION_MIN_NUMBER_OF_ZONES 6
 #define THRESHOLD_MOTION_MAX_ZONES 4
 #define THRESHOLD_MOTION_MAX_TOTAL 20 * 16
@@ -175,6 +175,7 @@ bool initToF() {
 
   tofSensor.startRanging();
   Serial.printf("[ToF] Ranging started at %d Hz\n", TOF_RANGING_FREQ_HZ);
+  delay(100);
   return true;
 }
 
@@ -542,6 +543,7 @@ void goToSleep() {
   gpio_deep_sleep_hold_en();
   uint64_t io_mask = (1ULL << MOTIONSENSOR_PIN); 
   esp_sleep_enable_ext1_wakeup_io(io_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
+  //esp_sleep_enable_touchpad_wakeup();
   esp_sleep_enable_timer_wakeup(WAKEUP_TIMER_SECONDS * uS_TO_S_FACTOR);
   esp_deep_sleep_start();
 }
@@ -664,7 +666,8 @@ void saveToFdump(String file, VL53L5CX_ResultsData data, bool motion){
 
 void onTofInt(){
   if(tofSensor.getRangingData(&tofData)){
-    bool motion = checkHighMotion(tofData);
+    Serial.println(tofData.distance_mm[0]);
+    bool motion =checkHighMotion(tofData);
     if(!motion){
       wakeSlave();
 
@@ -712,8 +715,8 @@ void setup() {
 
   pinMode(TO_SLAVE_PIN, OUTPUT);
   digitalWrite(TO_SLAVE_PIN, LOW);
-  pinMode(TOF_SENSOR_PIN, OUTPUT);
-  powerOffToF();
+  //pinMode(TOF_SENSOR_PIN, OUTPUT);
+  //powerOffToF();
   pinMode(TOF_SENSOR_INTERRUPT_PIN, INPUT_PULLUP);
 
   sdmmcInit();
@@ -792,7 +795,8 @@ void setup() {
     if (status & (1ULL << MOTIONSENSOR_PIN)) {
         Serial.println("Woke up from motion sensor INT");
 
-        powerOnToF();
+        // Tof always on
+        //powerOnToF();
         if (initToF()){
 
           initCamera();
@@ -806,8 +810,9 @@ void setup() {
               onTofInt();
             elapsedTime = esp_timer_get_time() - startTime;
           }
-          powerOffToF();
+          //powerOffToF();
         }
+        tofSensor.stopRanging();
         goToSleep();
     }
   } else Serial.println("Cold boot");
