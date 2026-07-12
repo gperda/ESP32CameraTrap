@@ -37,7 +37,7 @@
 
 #define MAX_WIFI_WAIT_TIME_MS     6000
 #define MAX_WS_WAIT_TIME_MS       4000
-#define WAKEUP_TIMER_SECONDS      10
+//#define WAKEUP_TIMER_SECONDS      10
 #define LISTEN_WAIT_TIME_US       10 * uS_TO_S_FACTOR
 #define SYNC_TIME_EVERY_N_CONNECTIONS   20
 
@@ -75,9 +75,6 @@ String normalizeBuildFlagString(const char* rawValue) {
   }
   return value;
 }
-
-// const char* server_hostname = "3dom";
-//const uint16_t server_port  = 3000;
 
 // =================== Globals ===================
 WebSocketsClient client;
@@ -483,7 +480,7 @@ void goToSleep() {
   uint64_t io_mask = (1ULL << MOTIONSENSOR_PIN) | (1ULL << BUTTON_PIN); 
   esp_sleep_enable_ext1_wakeup_io(io_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
   //esp_sleep_enable_touchpad_wakeup();
-  esp_sleep_enable_timer_wakeup(WAKEUP_TIMER_SECONDS * uS_TO_S_FACTOR);
+  //esp_sleep_enable_timer_wakeup(WAKEUP_TIMER_SECONDS * uS_TO_S_FACTOR);
   esp_deep_sleep_start();
 }
 
@@ -595,106 +592,100 @@ void setup() {
 
   // ── Wake-cause guard ────────────────────────────────────────────────────
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-  if (cause == ESP_SLEEP_WAKEUP_TIMER){
-    ws2812SetColor(3);
-    
-    std::vector<String> flist = getSendList(SD_MMC, "/sendlist.txt");
-    wakeSlave();
-    slaveReady = false;
-    SyncPacket signal;
-    signal.type = 0x04;
-    Serial.print("Slave send: ");
-    esp_now_send(slaveMAC, (uint8_t*)&signal, sizeof(signal));
-    unsigned long t = millis();
-    while (!(slaveReady) && millis() - t < 2000);
-    connectToWiFi();
-    connectWS();
-
-    // Listen to incoming messages
-    unsigned long pollEnd = millis() + 1000;
-    while (millis() < pollEnd) {
-      client.loop();
-      delay(10);
-    }
-
-    if (WiFi.status() == WL_CONNECTED && client.isConnected()) {
-      digitalWrite(BLUE_LED_PIN, HIGH);
-      if(!flist.empty()){
-        // Allocate single send buffer from PSRAM for JPEG binary payloads
-        g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
-        if (!g_sendBuf) {
-          Serial.println("FATAL: Could not allocate send buffer in PSRAM");
-          while (true) delay(1000);
-        }
-        if (!g_sendBuf) { Serial.println("Send buffer not allocated"); return; }
-        for (const String& line : flist) {
-          uint64_t value = strtoull(line.c_str(), nullptr, 10);
-          sendFromSD(value);
-        }
-        free(g_sendBuf);
-        g_sendBuf = nullptr;
-        deleteFile(SD_MMC, "/sendlist.txt");
-        removeDirRecursive(SD_MMC, "/camera");
-      }
-    } else {
-      Serial.println("WiFi currently unavailable, will send later");
-    }
-    // ── OTA (ota_update received during poll above) ───────────────────────
-    if (otaRequested || otaPendingRTC) {
-      ws2812SetColor(3);
-      if (WiFi.status() != WL_CONNECTED) { 
-        Serial.println("[OTA] WiFi unavailable, will retry on next wakeup");
-        goToSleep(); 
-      }
-      isUpToDate = false;
-      if (performOTAIfAvailable()) {
-        otaPendingRTC = false;
-        if (!isUpToDate)
-          ESP.restart();
-      }
-      // on failure: otaPendingRTC stays true, retry next wakeup
-    }
-
-    goToSleep();
-  } else if (cause == ESP_SLEEP_WAKEUP_EXT1){
+  if (cause == ESP_SLEEP_WAKEUP_EXT1){
     uint64_t status = esp_sleep_get_ext1_wakeup_status();
     if (status & (1ULL << MOTIONSENSOR_PIN)) {
-        Serial.println("Woke up from motion sensor");
+      Serial.println("Woke up from motion sensor");
 
-          initCamera();
-          createDir(SD_MMC, "/camera");
+        initCamera();
+        createDir(SD_MMC, "/camera");
 
-          uint64_t startTime   = esp_timer_get_time();
-          uint64_t elapsedTime = 0;
-          int i = 0;
-          while(elapsedTime < LISTEN_WAIT_TIME_US){
-            wakeSlave();
+        uint64_t startTime   = esp_timer_get_time();
+        uint64_t elapsedTime = 0;
+        int i = 0;
+        while(elapsedTime < LISTEN_WAIT_TIME_US){
+          wakeSlave();
 
-            SyncPacket pkt;
-            pkt.type         = 0x01;
-            // pkt.timestamp_us = esp_timer_get_time();
-            pkt.timestamp_ms = getEpochMillis();
-            ackReceived = false;
-            slaveReady  = false;
-            Serial.print("Slave capture signal: ");
+          SyncPacket pkt;
+          pkt.type         = 0x01;
+          // pkt.timestamp_us = esp_timer_get_time();
+          pkt.timestamp_ms = getEpochMillis();
+          ackReceived = false;
+          slaveReady  = false;
+          Serial.print("Slave capture signal: ");
 
-            delay(AFTER_MOTIONSENSOR_DELAY_MS);
-            Serial.println(esp_now_send(slaveMAC, (uint8_t*)&pkt, sizeof(pkt)));
+          delay(AFTER_MOTIONSENSOR_DELAY_MS);
+          Serial.println(esp_now_send(slaveMAC, (uint8_t*)&pkt, sizeof(pkt)));
 
-            unsigned long t = millis();
-            while (!(ackReceived && slaveReady) && millis() - t < 2000);
+          unsigned long t = millis();
+          while (!(ackReceived && slaveReady) && millis() - t < 2000);
 
-            if (!ackReceived || !slaveReady) {
-              Serial.println("No ACK from slave, aborting");
-              //goToSleep();
-            }
-            elapsedTime = esp_timer_get_time() - startTime;
-            delay(1000);
+          if (!ackReceived || !slaveReady) {
+            Serial.println("No ACK from slave, aborting");
+            //goToSleep();
           }
-        goToSleep();
+          elapsedTime = esp_timer_get_time() - startTime;
+          delay(1000);
+        }
     } else if (status & (1ULL << BUTTON_PIN)){
-      Serial.println("Button wakeup");
-      goToSleep();
+      Serial.println("Wakeup from button");
+      ws2812SetColor(3);
+      std::vector<String> flist = getSendList(SD_MMC, "/sendlist.txt");
+      wakeSlave();
+      slaveReady = false;
+      SyncPacket signal;
+      signal.type = 0x04;
+      Serial.print("Slave send: ");
+      esp_now_send(slaveMAC, (uint8_t*)&signal, sizeof(signal));
+      unsigned long t = millis();
+      while (!(slaveReady) && millis() - t < 2000);
+      connectToWiFi();
+      connectWS();
+
+      // Listen to incoming messages
+      unsigned long pollEnd = millis() + 1000;
+      while (millis() < pollEnd) {
+        client.loop();
+        delay(10);
+      }
+
+      if (WiFi.status() == WL_CONNECTED && client.isConnected()) {
+        digitalWrite(BLUE_LED_PIN, HIGH);
+        if(!flist.empty()){
+          // Allocate single send buffer from PSRAM for JPEG binary payloads
+          g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
+          if (!g_sendBuf) {
+            Serial.println("FATAL: Could not allocate send buffer in PSRAM");
+            while (true) delay(1000);
+          }
+          if (!g_sendBuf) { Serial.println("Send buffer not allocated"); return; }
+          for (const String& line : flist) {
+            uint64_t value = strtoull(line.c_str(), nullptr, 10);
+            sendFromSD(value);
+          }
+          free(g_sendBuf);
+          g_sendBuf = nullptr;
+          deleteFile(SD_MMC, "/sendlist.txt");
+          removeDirRecursive(SD_MMC, "/camera");
+        }
+      } else {
+        Serial.println("WiFi currently unavailable, will send later");
+      }
+      // ── OTA (ota_update received during poll above) ───────────────────────
+      if (otaRequested || otaPendingRTC) {
+        ws2812SetColor(3);
+        if (WiFi.status() != WL_CONNECTED) { 
+          Serial.println("[OTA] WiFi unavailable, will retry on next wakeup");
+          goToSleep(); 
+        }
+        isUpToDate = false;
+        if (performOTAIfAvailable()) {
+          otaPendingRTC = false;
+          if (!isUpToDate)
+            ESP.restart();
+        }
+        // on failure: otaPendingRTC stays true, retry next wakeup
+      }
     }
   } else Serial.println("Cold boot");
   goToSleep();
