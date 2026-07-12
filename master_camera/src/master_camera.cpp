@@ -17,6 +17,7 @@
 #include <ota_update.h>
 #include <Adafruit_VL53L5CX.h>
 #include "esp_sntp.h"
+#include "driver/rtc_io.h"
 
 // =================== CONFIGURATION ===================
 #define CAMERA_ID                 "cam1"
@@ -27,8 +28,11 @@
 #define GITHUB_REPO               "gperda/ESP32CameraTrap"
 #define uS_TO_S_FACTOR            1000000ULL 
 
-#define MOTIONSENSOR_PIN          GPIO_NUM_14
+#define MOTIONSENSOR_PIN          GPIO_NUM_21
 #define TO_SLAVE_PIN              GPIO_NUM_45
+#define BUTTON_PIN                GPIO_NUM_14
+#define BLUE_LED_PIN              GPIO_NUM_19
+
 #define AFTER_MOTIONSENSOR_DELAY_MS 1000
 
 #define MAX_WIFI_WAIT_TIME_MS     6000
@@ -476,7 +480,7 @@ void goToSleep() {
   WiFi.mode(WIFI_OFF);
   ws2812SetColor(1);
   gpio_deep_sleep_hold_en();
-  uint64_t io_mask = (1ULL << MOTIONSENSOR_PIN); 
+  uint64_t io_mask = (1ULL << MOTIONSENSOR_PIN) | (1ULL << BUTTON_PIN); 
   esp_sleep_enable_ext1_wakeup_io(io_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
   //esp_sleep_enable_touchpad_wakeup();
   esp_sleep_enable_timer_wakeup(WAKEUP_TIMER_SECONDS * uS_TO_S_FACTOR);
@@ -578,6 +582,11 @@ void setup() {
 
   pinMode(TO_SLAVE_PIN, OUTPUT);
   digitalWrite(TO_SLAVE_PIN, LOW);
+  pinMode(BLUE_LED_PIN, OUTPUT);
+  digitalWrite(BLUE_LED_PIN, LOW);
+  rtc_gpio_pulldown_en(BUTTON_PIN); 
+  rtc_gpio_pullup_dis(BUTTON_PIN);
+  // gpio_dump_io_configuration(stdout, 1ULL << 4 | (1ULL << 14) | (1ULL << 47) | (1ULL << 20) | (1ULL < 19));
 
   sdmmcInit();
   initEspNow();
@@ -609,6 +618,7 @@ void setup() {
     }
 
     if (WiFi.status() == WL_CONNECTED && client.isConnected()) {
+      digitalWrite(BLUE_LED_PIN, HIGH);
       if(!flist.empty()){
         // Allocate single send buffer from PSRAM for JPEG binary payloads
         g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
@@ -682,6 +692,9 @@ void setup() {
             delay(1000);
           }
         goToSleep();
+    } else if (status & (1ULL << BUTTON_PIN)){
+      Serial.println("Button wakeup");
+      goToSleep();
     }
   } else Serial.println("Cold boot");
   goToSleep();
