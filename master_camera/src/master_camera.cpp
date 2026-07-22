@@ -17,6 +17,7 @@
 #include <ota_update.h>
 #include <Adafruit_VL53L5CX.h>
 #include "esp_sntp.h"
+#include "driver/rtc_io.h"
 
 // =================== CONFIGURATION ===================
 #define CAMERA_ID                 "cam1"
@@ -27,11 +28,13 @@
 #define GITHUB_REPO               "gperda/ESP32CameraTrap"
 #define uS_TO_S_FACTOR            1000000ULL 
 
-#define MOTIONSENSOR_PIN          GPIO_NUM_14
-#define TO_SLAVE_PIN              GPIO_NUM_45
+#define MOTIONSENSOR_PIN          GPIO_NUM_21
+#define TO_SLAVE_PIN              GPIO_NUM_47
+#define BUTTON_PIN                GPIO_NUM_14
+#define BLUE_LED_PIN              GPIO_NUM_19
 
-#define TOF_SENSOR_PIN            GPIO_NUM_20
-#define TOF_SENSOR_INTERRUPT_PIN  GPIO_NUM_21
+// #define TOF_SENSOR_PIN            GPIO_NUM_19
+#define TOF_SENSOR_INTERRUPT_PIN  GPIO_NUM_20
 #define TOF_SDA_PIN               GPIO_NUM_41
 #define TOF_SCL_PIN               GPIO_NUM_42
 
@@ -42,7 +45,7 @@
 #define TOF_ZONES                 16      
 
 #define THRESHOLD_DISTANCE_MM_LOW  1000
-#define THRESHOLD_DISTANCE_MM_HIGH 1600
+#define THRESHOLD_DISTANCE_MM_HIGH 2000
 #define THRESHOLD_DETECTION_MIN_NUMBER_OF_ZONES 6
 #define THRESHOLD_MOTION_MAX_ZONES 4
 #define THRESHOLD_MOTION_MAX_TOTAL 20 * 16
@@ -103,12 +106,11 @@ bool motionDetected = false;
 static uint8_t* g_sendBuf = nullptr;
 
 // ── ToF globals ──────────────────────────────────────────────────────────────
-// SparkFun_VL53L5CX tofSensor;
 Adafruit_VL53L5CX tofSensor;
 VL53L5CX_ResultsData tofData;
 
 // =================== ESP-NOW COMMUNICATION ================
-uint8_t slaveMAC[] = {0xD0, 0xCF, 0x13, 0x26, 0xE0, 0x6C};
+uint8_t slaveMAC[] = {0xD0, 0xCF, 0x13, 0x26, 0xFB, 0x54};
 
 typedef struct Header {
   char     camera_id[8];   // fixed width
@@ -200,8 +202,8 @@ int initCamera(void) {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn     = PWDN_GPIO_NUM;
   config.pin_reset    = RESET_GPIO_NUM;
-  // config.xclk_freq_hz   = 8000000;
-  config.xclk_freq_hz   = 16000000;
+  //config.xclk_freq_hz   = 8000000;
+  config.xclk_freq_hz   = 20000000;
   config.frame_size     = FRAMESIZE_FHD;
   config.pixel_format   = PIXFORMAT_JPEG;
   config.grab_mode      = CAMERA_GRAB_WHEN_EMPTY;
@@ -541,10 +543,10 @@ void goToSleep() {
   WiFi.mode(WIFI_OFF);
   ws2812SetColor(1);
   gpio_deep_sleep_hold_en();
-  uint64_t io_mask = (1ULL << MOTIONSENSOR_PIN); 
+  uint64_t io_mask = (1ULL << MOTIONSENSOR_PIN) | (1ULL << BUTTON_PIN);
   esp_sleep_enable_ext1_wakeup_io(io_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
   //esp_sleep_enable_touchpad_wakeup();
-  esp_sleep_enable_timer_wakeup(WAKEUP_TIMER_SECONDS * uS_TO_S_FACTOR);
+  //esp_sleep_enable_timer_wakeup(WAKEUP_TIMER_SECONDS * uS_TO_S_FACTOR);
   esp_deep_sleep_start();
 }
 
@@ -698,15 +700,15 @@ void onTofInt(){
   }
 }
 
-void powerOffToF(){
-  digitalWrite(TOF_SENSOR_PIN, HIGH);
-  gpio_hold_en(TOF_SENSOR_PIN);
-}
+// void powerOffToF(){
+//   digitalWrite(TOF_SENSOR_PIN, HIGH);
+//   gpio_hold_en(TOF_SENSOR_PIN);
+// }
 
-void powerOnToF(){
-  gpio_hold_dis(TOF_SENSOR_PIN);
-  digitalWrite(TOF_SENSOR_PIN, LOW);
-}
+// void powerOnToF(){
+//   gpio_hold_dis(TOF_SENSOR_PIN);
+//   digitalWrite(TOF_SENSOR_PIN, LOW);
+// }
 
 // =================== Arduino Setup ===================
 void setup() {
@@ -715,8 +717,12 @@ void setup() {
 
   pinMode(TO_SLAVE_PIN, OUTPUT);
   digitalWrite(TO_SLAVE_PIN, LOW);
-  //pinMode(TOF_SENSOR_PIN, OUTPUT);
-  //powerOffToF();
+  pinMode(BLUE_LED_PIN, OUTPUT);
+  digitalWrite(BLUE_LED_PIN, LOW);
+  rtc_gpio_pulldown_en(BUTTON_PIN); 
+  rtc_gpio_pullup_dis(BUTTON_PIN);
+  // pinMode(TOF_SENSOR_PIN, OUTPUT);
+  // powerOffToF();
   pinMode(TOF_SENSOR_INTERRUPT_PIN, INPUT_PULLUP);
 
   sdmmcInit();
@@ -727,76 +733,13 @@ void setup() {
 
   // ── Wake-cause guard ────────────────────────────────────────────────────
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-  if (cause == ESP_SLEEP_WAKEUP_TIMER){
-    ws2812SetColor(3);
-    
-    std::vector<String> flist = getSendList(SD_MMC, "/sendlist.txt");
-    wakeSlave();
-    slaveReady = false;
-    SyncPacket signal;
-    signal.type = 0x04;
-    Serial.print("Slave send: ");
-    esp_now_send(slaveMAC, (uint8_t*)&signal, sizeof(signal));
-    unsigned long t = millis();
-    while (!(slaveReady) && millis() - t < 2000);
-    connectToWiFi();
-    connectWS();
-
-    // Listen to incoming messages
-    unsigned long pollEnd = millis() + 1000;
-    while (millis() < pollEnd) {
-      client.loop();
-      delay(10);
-    }
-
-    if (WiFi.status() == WL_CONNECTED && client.isConnected()) {
-      if(!flist.empty()){
-        // Allocate single send buffer from PSRAM for JPEG binary payloads
-        g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
-        if (!g_sendBuf) {
-          Serial.println("FATAL: Could not allocate send buffer in PSRAM");
-          while (true) delay(1000);
-        }
-        if (!g_sendBuf) { Serial.println("Send buffer not allocated"); return; }
-        for (const String& line : flist) {
-          uint64_t value = strtoull(line.c_str(), nullptr, 10);
-          sendFromSD(value);
-        }
-        free(g_sendBuf);
-        g_sendBuf = nullptr;
-        deleteFile(SD_MMC, "/sendlist.txt");
-        removeDirRecursive(SD_MMC, "/camera");
-      }
-
-      // Send queued ToF JSON files with per-file headers containing file names.
-      sendPendingTofDumpsFromSD();
-    } else {
-      Serial.println("WiFi currently unavailable, will send later");
-    }
-    // ── OTA (ota_update received during poll above) ───────────────────────
-    if (otaRequested || otaPendingRTC) {
-      ws2812SetColor(3);
-      if (WiFi.status() != WL_CONNECTED) { 
-        Serial.println("[OTA] WiFi unavailable, will retry on next wakeup");
-        goToSleep(); 
-      }
-      isUpToDate = false;
-      if (performOTAIfAvailable()) {
-        otaPendingRTC = false;
-        if (!isUpToDate)
-          ESP.restart();
-      }
-      // on failure: otaPendingRTC stays true, retry next wakeup
-    }
-
-    goToSleep();
-  } else if (cause == ESP_SLEEP_WAKEUP_EXT1){
+  if (cause == ESP_SLEEP_WAKEUP_EXT1){
     uint64_t status = esp_sleep_get_ext1_wakeup_status();
     if (status & (1ULL << MOTIONSENSOR_PIN)) {
         Serial.println("Woke up from motion sensor INT");
 
         // Tof always on
-        //powerOnToF();
+        // powerOnToF();
         if (initToF()){
 
           initCamera();
@@ -806,14 +749,103 @@ void setup() {
           uint64_t elapsedTime = 0;
           int i = 0;
           while(elapsedTime < TOF_SENSOR_WAIT_TIME_US){
-            if(digitalRead(TOF_SENSOR_INTERRUPT_PIN) == LOW)
-              onTofInt();
+
+                  wakeSlave();
+
+            SyncPacket pkt;
+            pkt.type         = 0x01;
+            // pkt.timestamp_us = esp_timer_get_time();
+            pkt.timestamp_ms = getEpochMillis();
+            ackReceived = false;
+            slaveReady  = false;
+            Serial.print("Slave capture signal: ");
+            Serial.println(esp_now_send(slaveMAC, (uint8_t*)&pkt, sizeof(pkt)));
+
+            unsigned long t = millis();
+            while (!(ackReceived && slaveReady) && millis() - t < 2000);
+
+            if (!ackReceived || !slaveReady) {
+              Serial.println("No ACK from slave, aborting");
+              //goToSleep();
+            }
+
+            if (captureToSD(pkt.timestamp_ms) == 0)
+              Serial.println("Error with capture");
+
+            // if(digitalRead(TOF_SENSOR_INTERRUPT_PIN) == LOW){
+            //   onTofInt();
+            //   delay(2000);
+            // }
+            delay(3000);
             elapsedTime = esp_timer_get_time() - startTime;
+
           }
-          //powerOffToF();
+          // powerOffToF();
         }
         tofSensor.stopRanging();
-        goToSleep();
+    } else if (status & (1ULL << BUTTON_PIN)){
+      ws2812SetColor(3);
+      
+      std::vector<String> flist = getSendList(SD_MMC, "/sendlist.txt");
+      wakeSlave();
+      slaveReady = false;
+      SyncPacket signal;
+      signal.type = 0x04;
+      Serial.print("Slave send: ");
+      esp_now_send(slaveMAC, (uint8_t*)&signal, sizeof(signal));
+      unsigned long t = millis();
+      while (!(slaveReady) && millis() - t < 2000);
+      connectToWiFi();
+      connectWS();
+
+      // Listen to incoming messages
+      unsigned long pollEnd = millis() + 1000;
+      while (millis() < pollEnd) {
+        client.loop();
+        delay(10);
+      }
+
+      if (WiFi.status() == WL_CONNECTED && client.isConnected()) {
+        digitalWrite(BLUE_LED_PIN, HIGH);
+        if(!flist.empty()){
+          // Allocate single send buffer from PSRAM for JPEG binary payloads
+          g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
+          if (!g_sendBuf) {
+            Serial.println("FATAL: Could not allocate send buffer in PSRAM");
+            while (true) delay(1000);
+          }
+          if (!g_sendBuf) { Serial.println("Send buffer not allocated"); return; }
+          for (const String& line : flist) {
+            uint64_t value = strtoull(line.c_str(), nullptr, 10);
+            sendFromSD(value);
+          }
+          free(g_sendBuf);
+          g_sendBuf = nullptr;
+          deleteFile(SD_MMC, "/sendlist.txt");
+          removeDirRecursive(SD_MMC, "/camera");
+        }
+
+        // Send queued ToF JSON files with per-file headers containing file names.
+        sendPendingTofDumpsFromSD();
+      } else {
+        Serial.println("WiFi currently unavailable, will send later");
+      }
+      // ── OTA (ota_update received during poll above) ───────────────────────
+      if (otaRequested || otaPendingRTC) {
+        ws2812SetColor(3);
+        if (WiFi.status() != WL_CONNECTED) { 
+          Serial.println("[OTA] WiFi unavailable, will retry on next wakeup");
+          goToSleep(); 
+        }
+        isUpToDate = false;
+        if (performOTAIfAvailable()) {
+          otaPendingRTC = false;
+          if (!isUpToDate)
+            ESP.restart();
+        }
+        // on failure: otaPendingRTC stays true, retry next wakeup
+      }
+
     }
   } else Serial.println("Cold boot");
   goToSleep();
