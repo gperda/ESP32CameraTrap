@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ESP32  Camera Viewer</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/dark.css" />
   <style>
     /* ── Original tokens (unchanged) ───────────────────────────── */
     :root {
@@ -47,6 +48,7 @@
       padding: 18px 24px;
       text-align: center;
       border-bottom: 2px solid var(--border);
+      position: relative;
     }
     header h1 {
       font-size: 1.6rem;
@@ -73,6 +75,13 @@
     }
     .dot.on-blue  { background: var(--blue);  box-shadow: 0 0 6px var(--blue);  }
     .dot.on-green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+
+    .header-ota {
+      position: absolute;
+      top: 14px;
+      right: 16px;
+      z-index: 2;
+    }
 
     /* ── Controls ── */
     .controls {
@@ -206,13 +215,14 @@
       color: #b2c2d8;
       letter-spacing: 0;
     }
-    .history-filters input[type="datetime-local"] {
+    .history-filters input {
       background: #0c1b35;
       border: 1px solid #2b4d79;
       border-radius: 6px;
       color: var(--text);
       font-size: 0.74rem;
       padding: 4px 7px;
+      min-width: 148px;
     }
     .btn-history-load {
       padding: 6px 11px;
@@ -252,7 +262,14 @@
     }
     .pair-row:hover  { background: rgba(255,255,255,0.07); }
     .pair-row.active { background: rgba(233,69,96,0.18); outline: 1px solid var(--accent); }
-    .pair-row .pair-ts { font-size: 0.78rem; color: #9aa; min-width: 100px; flex-shrink: 0; }
+    .pair-row .pair-ts {
+      font-size: 0.74rem;
+      color: #9aa;
+      min-width: 280px;
+      flex-shrink: 0;
+      font-family: var(--mono);
+      white-space: nowrap;
+    }
     .cam-badge {
       font-size: 0.75rem;
       padding: 2px 8px;
@@ -868,6 +885,16 @@
 
     /* ── Responsive ── */
     @media (max-width: 640px) {
+      header {
+        padding-top: 60px;
+      }
+      .header-ota {
+        top: 12px;
+        right: 12px;
+      }
+      .pair-row .pair-ts {
+        min-width: 100%;
+      }
       .tof-body { grid-template-columns: 1fr; }
       .tof-map-col { border-right: none; border-bottom: 1px solid var(--border); }
       .tof-matrix-grid { grid-template-columns: 1fr; }
@@ -882,19 +909,13 @@
      ════════════════════════════════════════════════════════════ -->
 <header>
   <h1>📷  ESP32 Dual Camera Viewer</h1>
+  <button class="btn-ota header-ota" id="btnOta" onclick="send('request_ota')">⬆ OTA Update</button>
   <div class="status-row">
     <div class="status-item"><div class="dot" id="dotServer"></div><span>Server</span></div>
     <div class="status-item"><div class="dot" id="dotCam1"></div><span>Camera 1</span></div>
     <div class="status-item"><div class="dot" id="dotCam2"></div><span>Camera 2</span></div>
   </div>
 </header>
-
-<div class="controls">
-  <button class="btn-snap"  onclick="send('trigger_capture')">📸 Capture Now</button>
-  <button class="btn-start" id="btnStart" onclick="send('start_auto')">▶ Start Auto</button>
-  <button class="btn-stop"  id="btnStop"  onclick="send('stop_auto')">⏹ Stop Auto</button>
-  <button class="btn-ota"   id="btnOta"   onclick="send('request_ota')">⬆ OTA Update</button>
-</div>
 
 <div class="cameras">
   <!-- Camera 2 -->
@@ -934,8 +955,8 @@
   <div class="pair-section-header">
     <span>Captured Pairs</span>
     <div class="history-filters">
-      <label>From <input type="datetime-local" id="historyStart" /></label>
-      <label>To <input type="datetime-local" id="historyEnd" /></label>
+      <label>From <input type="text" id="historyStart" placeholder="dd/mm/yyyy hh:mm" inputmode="numeric" /></label>
+      <label>To <input type="text" id="historyEnd" placeholder="dd/mm/yyyy hh:mm" inputmode="numeric" /></label>
       <button class="btn-history-load" id="btnHistoryLoad">Load</button>
     </div>
   </div>
@@ -1117,6 +1138,8 @@
 
 <div id="tofTooltip"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+
 
 <!-- ════════════════════════════════════════════════════════════
      SCRIPT
@@ -1152,8 +1175,6 @@ try {
 const $dotServer = document.getElementById('dotServer');
 const $dotCam1   = document.getElementById('dotCam1');
 const $dotCam2   = document.getElementById('dotCam2');
-const $btnStart  = document.getElementById('btnStart');
-const $btnStop   = document.getElementById('btnStop');
 const $stats     = document.getElementById('stats');
 const $fw1       = document.getElementById('fw1');
 const $fw2       = document.getElementById('fw2');
@@ -1255,24 +1276,79 @@ function setHistoryStatus(text, isError = false) {
   $historyStatus.style.color = isError ? '#ff9696' : '#9db2c7';
 }
 
-function toDatetimeLocalValue(ms) {
-  const d = new Date(ms - (new Date().getTimezoneOffset() * 60_000));
-  return d.toISOString().slice(0, 16);
+function formatDateTime24(ms) {
+  const d = new Date(ms);
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = String(d.getFullYear());
+  const hh = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return `${dd}/${mm}/${yyyy} ${hh}:${min}`;
+}
+
+function parseDateTime24(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+
+  const m = text.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return null;
+
+  const day = Number(m[1]);
+  const month = Number(m[2]);
+  const year = Number(m[3]);
+  const hour = Number(m[4]);
+  const minute = Number(m[5]);
+  const second = m[6] ? Number(m[6]) : 0;
+
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > 31) return null;
+  if (hour < 0 || hour > 23) return null;
+  if (minute < 0 || minute > 59) return null;
+  if (second < 0 || second > 59) return null;
+
+  const d = new Date(year, month - 1, day, hour, minute, second, 0);
+  if (
+    d.getFullYear() !== year ||
+    d.getMonth() !== month - 1 ||
+    d.getDate() !== day ||
+    d.getHours() !== hour ||
+    d.getMinutes() !== minute ||
+    d.getSeconds() !== second
+  ) {
+    return null;
+  }
+
+  return d.getTime();
 }
 
 function initDefaultHistoryWindow() {
   const now = Date.now();
-  if ($historyEnd && !$historyEnd.value) $historyEnd.value = toDatetimeLocalValue(now);
-  if ($historyStart && !$historyStart.value) $historyStart.value = toDatetimeLocalValue(now - 24 * 60 * 60 * 1000);
+  if ($historyEnd && !$historyEnd.value) $historyEnd.value = formatDateTime24(now);
+  if ($historyStart && !$historyStart.value) $historyStart.value = formatDateTime24(now - 24 * 60 * 60 * 1000);
 }
 
 function getHistoryWindowMs() {
-  const startMs = $historyStart && $historyStart.value ? new Date($historyStart.value).getTime() : null;
-  const endMs = $historyEnd && $historyEnd.value ? new Date($historyEnd.value).getTime() : null;
+  const startMs = $historyStart ? parseDateTime24($historyStart.value) : null;
+  const endMs = $historyEnd ? parseDateTime24($historyEnd.value) : null;
   return {
     startMs: Number.isFinite(startMs) ? startMs : null,
     endMs: Number.isFinite(endMs) ? endMs : null,
   };
+}
+
+function initHistoryDatePickers() {
+  if (typeof flatpickr !== 'function') return;
+
+  const pickerOptions = {
+    enableTime: true,
+    time_24hr: true,
+    dateFormat: 'd/m/Y H:i',
+    allowInput: true,
+    minuteIncrement: 1,
+  };
+
+  if ($historyStart) flatpickr($historyStart, pickerOptions);
+  if ($historyEnd) flatpickr($historyEnd, pickerOptions);
 }
 
 function setHistoryToken(token) {
@@ -1322,6 +1398,19 @@ async function loadHistoryMetadata({ replace = true } = {}) {
 
   try {
     const { startMs, endMs } = getHistoryWindowMs();
+    const rawStart = $historyStart && typeof $historyStart.value === 'string' ? $historyStart.value.trim() : '';
+    const rawEnd = $historyEnd && typeof $historyEnd.value === 'string' ? $historyEnd.value.trim() : '';
+
+    if (rawStart && startMs === null) {
+      throw new Error('Invalid From value. Use dd/mm/yyyy hh:mm');
+    }
+    if (rawEnd && endMs === null) {
+      throw new Error('Invalid To value. Use dd/mm/yyyy hh:mm');
+    }
+    if (startMs !== null && endMs !== null && startMs > endMs) {
+      throw new Error('From cannot be greater than To');
+    }
+
     const qs = new URLSearchParams({ limit: String(HISTORY_PAGE_LIMIT) });
     if (startMs !== null) qs.set('startMs', String(startMs));
     if (endMs !== null) qs.set('endMs', String(endMs));
@@ -1360,6 +1449,7 @@ if ($btnHistoryLoad) {
   });
 }
 
+initHistoryDatePickers();
 initDefaultHistoryWindow();
 
 /* ── WebSocket ── */
@@ -1388,8 +1478,6 @@ function connect() {
       if (m.type === 'status') {
         setDot($dotCam1, m.cameras.includes('cam1') ? 'on-green' : null);
         setDot($dotCam2, m.cameras.includes('cam2') ? 'on-green' : null);
-        $btnStart.style.opacity = m.captureActive ? 0.45 : 1;
-        $btnStop.style.opacity  = m.captureActive ? 1    : 0.45;
 
         const masterPending = !!m.masterOTAPending;
         const slavePending  = !!m.slaveOTAPending;
@@ -1483,12 +1571,26 @@ connect();
 // ─────────────────────────────────────────────────────────────
 
 function formatTs(tsStr) {
-  const n = Number(tsStr);
-  if (!isNaN(n)) {
-    if (tsStr.length >= 16) return new Date(Math.floor(n / 1000)).toLocaleTimeString();  // µs epoch
-    if (tsStr.length === 13) return new Date(n).toLocaleTimeString();                    // ms epoch
+  const raw = String(tsStr || '').trim();
+  const n = Number(raw);
+  let ms = null;
+  if (Number.isFinite(n)) {
+    if (raw.length >= 16) ms = Math.floor(n / 1000); // µs epoch
+    else if (raw.length === 13) ms = n;              // ms epoch
+    else if (raw.length === 10) ms = n * 1000;       // s epoch
+    else ms = n;
   }
-  return tsStr.length > 10 ? '\u2026' + tsStr.slice(-10) : tsStr;
+
+  if (!Number.isFinite(ms)) return raw;
+
+  const d = new Date(ms);
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = String(d.getFullYear());
+  const hh = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  const sec = String(d.getSeconds()).padStart(2, '0');
+  return `${dd}/${mm}/${yyyy} ${hh}:${min}:${sec}`;
 }
 
 function parseTsToMs(tsStr) {
@@ -1515,7 +1617,7 @@ function ensurePairEntry(tsStr) {
 
     const tsSpan   = document.createElement('span');
     tsSpan.className   = 'pair-ts';
-    tsSpan.textContent = formatTs(tsStr);
+    tsSpan.textContent = `${formatTs(tsStr)} (${tsStr})`;
 
     const badge1El = document.createElement('span');
     badge1El.className   = 'cam-badge missing';
@@ -2890,7 +2992,7 @@ function renderTofPayload(payload, meta = {}) {
   document.getElementById('statHighMotion').textContent = highMotion ? 'YES' : 'NO';
   document.getElementById('statFileName').textContent = meta.filename || '(live)';
   document.getElementById('statTs').textContent =
-    meta.ts ? new Date(meta.ts).toISOString().slice(11, 23) : '—';
+    meta.ts ? formatTs(String(meta.ts)) : '—';
 
   tofFrameCount++;
   document.getElementById('statFrames').textContent = tofFrameCount;
