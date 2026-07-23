@@ -2,6 +2,10 @@
 master_camera/.pio
 slave_camera/.pio
 
+#Managed components
+master_camera/managed_components
+slave_camera/managed_components
+
 # VSCode
 master_camera/.vscode
 slave_camera/.vscode
