@@ -119,12 +119,66 @@ volatile uint64_t captureTimestamp = 0;
 RTC_DATA_ATTR bool otaPendingRTC = false;
 volatile bool shouldOTA = false;
 volatile bool isUpToDate = false;
+RTC_DATA_ATTR uint32_t captureSuccessCount = 0;
+RTC_DATA_ATTR uint32_t captureFailCount = 0;
 
 extern const char ca_cert_start[] asm("_binary_ca_cert_start");
 
 struct_message out_msg;
 struct_message in_msg;
 String success;
+
+bool sampleSdMetrics(uint64_t* totalBytes, uint64_t* usedBytes, uint64_t* freeBytes, uint32_t* usagePct) {
+  if (!totalBytes || !usedBytes || !freeBytes || !usagePct) return false;
+  uint64_t total = SD_MMC.totalBytes();
+  uint64_t used = SD_MMC.usedBytes();
+  if (total == 0 || used > total) {
+    *totalBytes = 0;
+    *usedBytes = 0;
+    *freeBytes = 0;
+    *usagePct = 0;
+    return false;
+  }
+
+  *totalBytes = total;
+  *usedBytes = used;
+  *freeBytes = total - used;
+  *usagePct = (uint32_t)((used * 100ULL) / total);
+  return true;
+}
+
+void sendSlaveDiagnostics() {
+  if (!client.isConnected()) return;
+
+  uint64_t sdTotal = 0;
+  uint64_t sdUsed = 0;
+  uint64_t sdFree = 0;
+  uint32_t sdUsagePct = 0;
+  bool sdOk = sampleSdMetrics(&sdTotal, &sdUsed, &sdFree, &sdUsagePct);
+
+  char payload[384];
+  int n = snprintf(
+    payload,
+    sizeof(payload),
+    "{\"type\":\"cam_diag\",\"camId\":\"%s\",\"captureSuccessCount\":%lu,\"captureFailCount\":%lu,\"imagesCaptured\":%lu,\"sdTotalBytes\":%llu,\"sdUsedBytes\":%llu,\"sdFreeBytes\":%llu,\"sdUsagePct\":%lu,\"sdMetricsValid\":%s}",
+    CAMERA_ID,
+    (unsigned long)captureSuccessCount,
+    (unsigned long)captureFailCount,
+    (unsigned long)captureSuccessCount,
+    (unsigned long long)sdTotal,
+    (unsigned long long)sdUsed,
+    (unsigned long long)sdFree,
+    (unsigned long)sdUsagePct,
+    sdOk ? "true" : "false"
+  );
+
+  if (n <= 0 || n >= (int)sizeof(payload)) {
+    Serial.println("[diag] Failed to build slave diagnostics payload");
+    return;
+  }
+
+  client.sendTXT(payload);
+}
 
 // =================== Camera ===================
 int initCamera(void) {
@@ -406,12 +460,14 @@ int captureToSD(uint64_t timestamp) {
   camera_fb_t* fb = esp_camera_fb_get();
   Serial.printf("%llu\n", esp_timer_get_time()-t);
   if (!fb) {
+    captureFailCount++;
     Serial.println("Capture failed");
     return 0;
   }
 
   if (fb->len > MAX_FRAME_SIZE) {
     Serial.printf("Frame too large (%u bytes), skipping\n", fb->len);
+    captureFailCount++;
     esp_camera_fb_return(fb);
     return 0;
   }
@@ -425,6 +481,7 @@ int captureToSD(uint64_t timestamp) {
   appendFile(SD_MMC, "/sendlist.txt", message.c_str());
 
   esp_camera_fb_return(fb);  // Return immediately after write
+  captureSuccessCount++;
   return 1;
 }
 
@@ -526,6 +583,11 @@ void loop() {
     while (millis() < pollEnd) {
       client.loop();
       delay(10);
+    }
+
+    if (WiFi.status() == WL_CONNECTED && client.isConnected()) {
+      sendSlaveDiagnostics();
+      client.loop();
     }
 
     if (!flist.empty()){

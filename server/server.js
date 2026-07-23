@@ -1108,11 +1108,41 @@ const browserClients = new Set();
 // Image cache so late-joining browsers get the last frame immediately
 const latestImages = { cam1: null, cam2: null };
 const firmwareVersions = { cam1: null, cam2: null };
+const cameraDiagnostics = { cam1: null, cam2: null };
 
 let captureTimer = null;
 let masterOTAPending   = false;
 let slaveOTAPending = false;
 const CAPTURE_INTERVAL_MS = 2000;  // default auto-capture rate
+
+function toNonNegativeInt(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.floor(n);
+}
+
+function sanitizeCameraDiagnostics(payload, fallbackCamId = null) {
+  if (!payload || typeof payload !== 'object') return null;
+  const rawCamId = typeof payload.camId === 'string' ? payload.camId : fallbackCamId;
+  const camId = rawCamId === 'cam1' || rawCamId === 'cam2' ? rawCamId : null;
+  if (!camId) return null;
+
+  return {
+    camId,
+    captureSuccessCount: toNonNegativeInt(payload.captureSuccessCount),
+    captureFailCount: toNonNegativeInt(payload.captureFailCount),
+    imagesCaptured: toNonNegativeInt(payload.imagesCaptured),
+    motionWakeCount: toNonNegativeInt(payload.motionWakeCount),
+    ackSuccessCount: toNonNegativeInt(payload.ackSuccessCount),
+    ackFailCount: toNonNegativeInt(payload.ackFailCount),
+    sdTotalBytes: toNonNegativeInt(payload.sdTotalBytes),
+    sdUsedBytes: toNonNegativeInt(payload.sdUsedBytes),
+    sdFreeBytes: toNonNegativeInt(payload.sdFreeBytes),
+    sdUsagePct: toNonNegativeInt(payload.sdUsagePct),
+    sdMetricsValid: typeof payload.sdMetricsValid === 'boolean' ? payload.sdMetricsValid : null,
+    receivedAtMs: Date.now(),
+  };
+}
 
 // ─── Connection handler ───
 wss.on('connection', (ws, req) => {
@@ -1173,6 +1203,26 @@ wss.on('connection', (ws, req) => {
         for (const b of browserClients) {
           if (b.readyState === WebSocket.OPEN) b.send(msg);
         }
+        return;
+      }
+
+      let parsedTextJson = null;
+      if (text.startsWith('{') && text.endsWith('}')) {
+        try {
+          parsedTextJson = JSON.parse(text);
+        } catch {
+          parsedTextJson = null;
+        }
+      }
+
+      if (parsedTextJson?.type === 'cam_diag') {
+        const normalized = sanitizeCameraDiagnostics(parsedTextJson, ws.cameraId);
+        if (!normalized) {
+          console.warn('[diag] Ignored malformed camera diagnostics payload');
+          return;
+        }
+        cameraDiagnostics[normalized.camId] = normalized;
+        broadcastStatus();
         return;
       }
 
@@ -1350,7 +1400,8 @@ function makeStatus() {
     captureActive: captureTimer !== null,
     masterOTAPending,
     slaveOTAPending,
-    firmwareVersions
+    firmwareVersions,
+    diagnostics: cameraDiagnostics,
   });
 }
 
