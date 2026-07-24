@@ -106,6 +106,8 @@ static uint8_t* g_sendBuf = nullptr;
 Adafruit_VL53L5CX tofSensor;
 VL53L5CX_ResultsData tofData;
 
+
+sensor_t* s_cam;
 // =================== ESP-NOW COMMUNICATION ================
 uint8_t slaveMAC[] = {0xD0, 0xCF, 0x13, 0x26, 0xFB, 0x54};
 
@@ -274,7 +276,7 @@ int initCamera(void) {
   config.pin_pwdn     = PWDN_GPIO_NUM;
   config.pin_reset    = RESET_GPIO_NUM;
   //config.xclk_freq_hz   = 8000000;
-  config.xclk_freq_hz   = 20000000;
+  config.xclk_freq_hz   = 24000000;
   config.frame_size     = FRAMESIZE_FHD;
   config.pixel_format   = PIXFORMAT_JPEG;
   config.grab_mode      = CAMERA_GRAB_WHEN_EMPTY;
@@ -297,14 +299,14 @@ int initCamera(void) {
     return 0;
   }
 
-  sensor_t* s = esp_camera_sensor_get();
-  //s->set_vflip(s, 1);
-  s->set_hmirror(s, 1);
-  s->set_brightness(s, 1);
-  s->set_saturation(s, 0);
+  s_cam = esp_camera_sensor_get();
+  s_cam->set_hmirror(s_cam, 1);
+  s_cam->set_brightness(s_cam, 1);
+  s_cam->set_saturation(s_cam, 0);
+  //s_cam->set_reg(s_cam, 0x3008, 0xFF, 0x42); //Camera to standby
+  delay(1000);
 
   Serial.println("Camera configuration complete!");
-  delay(10);
   return 1;
 }
 
@@ -821,8 +823,9 @@ void setup() {
         if(initToF()){
           if(tofSensor.startRanging()){
             Serial.printf("[ToF] Ranging started at %d Hz\n", TOF_RANGING_FREQ_HZ);
-
+            esp_camera_deinit();
             initCamera();
+            // s_cam->set_reg(s_cam, 0x3008, 0xFF, 0x82);
             createDir(SD_MMC, "/camera");
 
             uint64_t startTime   = esp_timer_get_time();
@@ -846,6 +849,9 @@ void setup() {
               Serial.print("Slave capture signal: ");
               Serial.println(esp_now_send(slaveMAC, (uint8_t*)&pkt, sizeof(pkt)));
 
+              //s_cam->set_reg(s_cam, 0x3008, 0xFF, 0x02); // Wake camera from standby
+              //delay(1000);
+
               unsigned long t = millis();
               while (!(ackReceived && slaveReady) && millis() - t < 2000);
 
@@ -864,7 +870,11 @@ void setup() {
               delay(3000);
               elapsedTime = esp_timer_get_time() - startTime;
 
+              //s_cam->set_reg(s_cam, 0x3008, 0xFF, 0x42); // Send camera to standby
+              //delay(1000);
+              
           }
+          esp_camera_deinit();
         }
       }
       if(tofSensor.stopRanging())
