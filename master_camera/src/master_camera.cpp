@@ -34,7 +34,7 @@
 #define BLUE_LED_PIN              GPIO_NUM_19
 
 // #define TOF_SENSOR_PIN            GPIO_NUM_19
-#define TOF_SENSOR_INTERRUPT_PIN  GPIO_NUM_20
+#define TOF_SENSOR_INTERRUPT_PIN  GPIO_NUM_48
 #define TOF_SDA_PIN               GPIO_NUM_41
 #define TOF_SCL_PIN               GPIO_NUM_42
 
@@ -44,8 +44,8 @@
 #define TOF_RANGING_FREQ_HZ       15
 #define TOF_ZONES                 16      
 
-#define THRESHOLD_DISTANCE_MM_LOW  1000
-#define THRESHOLD_DISTANCE_MM_HIGH 2000
+#define THRESHOLD_DISTANCE_MM_LOW  1500
+#define THRESHOLD_DISTANCE_MM_HIGH 3000
 #define THRESHOLD_DETECTION_MIN_NUMBER_OF_ZONES 6
 #define THRESHOLD_MOTION_MAX_ZONES 4
 #define THRESHOLD_MOTION_MAX_TOTAL 20 * 16
@@ -54,7 +54,6 @@
 #define MAX_WS_WAIT_TIME_MS       4000
 #define WAKEUP_TIMER_SECONDS      10
 
-#define SYNC_TIME_EVERY_N_CONNECTIONS   20
 
 #ifndef CF_ACCESS_CLIENT_ID
 #define CF_ACCESS_CLIENT_ID
@@ -224,7 +223,7 @@ bool initToF() {
     Serial.println("[ToF] Failed to set motion distance"); 
     return false;
   }
-  VL53L5CX_DetectionThresholds thresholds[TOF_ZONES];
+  VL53L5CX_DetectionThresholds thresholds[VL53L5CX_NB_THRESHOLDS];
   memset(thresholds, 0, sizeof(thresholds));
 
   Serial.println(F("[ToF] Configuring detection thresholds..."));
@@ -239,7 +238,7 @@ bool initToF() {
   }
 
   // Mark end of threshold list
-  thresholds[TOF_ZONES-1].zone_num = VL53L5CX_LAST_THRESHOLD;
+  thresholds[TOF_ZONES].zone_num = VL53L5CX_LAST_THRESHOLD;
 
   if(!tofSensor.setDetectionThresholds(thresholds)){ 
     Serial.println("[ToF] Failed to set thresh");
@@ -406,10 +405,7 @@ void connectToWiFi() {
   unsigned long t = millis();
   while (WiFi.status() != WL_CONNECTED && millis() -t < MAX_WIFI_WAIT_TIME_MS) { delay(500); Serial.print("."); }
   if(WiFi.status() == WL_CONNECTED){  
-    wakeCount++;
-    if (wakeCount == 1 || wakeCount % SYNC_TIME_EVERY_N_CONNECTIONS == 0 ) {
-      syncTimeFromNTP();
-    }
+    syncTimeFromNTP();
     WiFi.config(WiFi.localIP(), WiFi.gatewayIP(), WiFi.subnetMask(),
                 IPAddress(1,1,1,1), IPAddress(8,8,8,8));
     Serial.printf(" OK  IP=%s\n", WiFi.localIP().toString().c_str());
@@ -663,18 +659,6 @@ bool performOTAIfAvailable() {
 }
 
 bool checkHighMotion(const VL53L5CX_ResultsData results){
-  // uint8_t triggerCount = 0;
-
-  // for (uint8_t zone = 0; zone < TOF_ZONES; zone++) {
-  //   int16_t distance = results.distance_mm[zone];
-  //   if (distance >= THRESHOLD_DISTANCE_MM_LOW && distance <= THRESHOLD_DISTANCE_MM_HIGH) {
-  //       Serial.println();
-  //       Serial.print("Positive trigger in zones: ");
-  //       Serial.print(triggerCount);
-  //       Serial.println();
-  //       triggerCount++;
-  //   }
-  // }
   if (results.motion_indicator.nb_of_detected_aggregates >= THRESHOLD_MOTION_MAX_ZONES) {
     return true;
   }
@@ -743,6 +727,18 @@ void saveToFdump(String file, VL53L5CX_ResultsData data, bool motion){
   
   writeFile(SD_MMC, file.c_str(), jsonBuffer);
   
+}
+
+void onTofIntLight(){
+  Serial.println("Tof INT");
+  if(tofSensor.getRangingData(&tofData)){
+    bool motion =checkHighMotion(tofData);
+    if(!motion){
+      digitalWrite(BLUE_LED_PIN, HIGH);
+      delay(3000);
+      digitalWrite(BLUE_LED_PIN, LOW);
+    }
+  }
 }
 
 void onTofInt(){
@@ -820,66 +816,82 @@ void setup() {
     if (status & (1ULL << MOTIONSENSOR_PIN)) {
         motionWakeCount++;
         Serial.println("Woke up from motion sensor INT");
+
+
+        //     //Uncomment for PIR TEST
         if(initToF()){
           if(tofSensor.startRanging()){
+            digitalWrite(BLUE_LED_PIN, HIGH);
+            delay(100);
+            digitalWrite(BLUE_LED_PIN, LOW);
             Serial.printf("[ToF] Ranging started at %d Hz\n", TOF_RANGING_FREQ_HZ);
-            esp_camera_deinit();
-            initCamera();
-            // s_cam->set_reg(s_cam, 0x3008, 0xFF, 0x82);
-            createDir(SD_MMC, "/camera");
+        //     esp_camera_deinit();
+        //     initCamera();
+        //     // s_cam->set_reg(s_cam, 0x3008, 0xFF, 0x82);
+        //     createDir(SD_MMC, "/camera");
 
             uint64_t startTime   = esp_timer_get_time();
             uint64_t elapsedTime = 0;
             int i = 0;
             while(elapsedTime < TOF_SENSOR_WAIT_TIME_US){
-              // if(digitalRead(TOF_SENSOR_INTERRUPT_PIN) == LOW){
-              //   onTofInt();
-              //   delay(2000);
-              // }
-
-
-              wakeSlave();
-
-              SyncPacket pkt;
-              pkt.type         = 0x01;
-              // pkt.timestamp_us = esp_timer_get_time();
-              pkt.timestamp_ms = getEpochMillis();
-              ackReceived = false;
-              slaveReady  = false;
-              Serial.print("Slave capture signal: ");
-              Serial.println(esp_now_send(slaveMAC, (uint8_t*)&pkt, sizeof(pkt)));
-
-              //s_cam->set_reg(s_cam, 0x3008, 0xFF, 0x02); // Wake camera from standby
-              //delay(1000);
-
-              unsigned long t = millis();
-              while (!(ackReceived && slaveReady) && millis() - t < 2000);
-
-              if (!ackReceived || !slaveReady) {
-                ackFailCount++;
-                Serial.println("No ACK from slave, aborting");
-                //goToSleep();
-              } else {
-                ackSuccessCount++;
+              if(digitalRead(TOF_SENSOR_INTERRUPT_PIN) == LOW){
+                //onTofInt();
+                // delay(2000);
+                onTofIntLight();
               }
-
-              if (captureToSD(pkt.timestamp_ms) == 0)
-                Serial.println("Error with capture");
-
-              
-              delay(3000);
               elapsedTime = esp_timer_get_time() - startTime;
+            }
 
-              //s_cam->set_reg(s_cam, 0x3008, 0xFF, 0x42); // Send camera to standby
-              //delay(1000);
+
+        //       wakeSlave();
+
+        //       SyncPacket pkt;
+        //       pkt.type         = 0x01;
+        //       // pkt.timestamp_us = esp_timer_get_time();
+        //       pkt.timestamp_ms = getEpochMillis();
+        //       ackReceived = false;
+        //       slaveReady  = false;
+        //       Serial.print("Slave capture signal: ");
+        //       Serial.println(esp_now_send(slaveMAC, (uint8_t*)&pkt, sizeof(pkt)));
+
+        //       //s_cam->set_reg(s_cam, 0x3008, 0xFF, 0x02); // Wake camera from standby
+        //       //delay(1000);
+
+        //       unsigned long t = millis();
+        //       while (!(ackReceived && slaveReady) && millis() - t < 2000);
+
+        //       if (!ackReceived || !slaveReady) {
+        //         ackFailCount++;
+        //         Serial.println("No ACK from slave, aborting");
+        //         //goToSleep();
+        //       } else {
+        //         ackSuccessCount++;
+        //       }
+
+        //       if (captureToSD(pkt.timestamp_ms) == 0)
+        //         Serial.println("Error with capture");
+
               
-          }
-          esp_camera_deinit();
-        }
+        //       delay(3000);
+        //       elapsedTime = esp_timer_get_time() - startTime;
+
+        //       //s_cam->set_reg(s_cam, 0x3008, 0xFF, 0x42); // Send camera to standby
+        //       //delay(1000);
+              
+        //   }
+        //   esp_camera_deinit();
+      //   // }
       }
       if(tofSensor.stopRanging())
-        if(tofSensor.setPowerMode(VL53L5CX_POWER_MODE_SLEEP))
+        if(tofSensor.setPowerMode(VL53L5CX_POWER_MODE_SLEEP)){
           Serial.println("[ToF] going to sleep");
+            digitalWrite(BLUE_LED_PIN, LOW);
+            delay(100);
+            digitalWrite(BLUE_LED_PIN, HIGH);
+            delay(100);
+            digitalWrite(BLUE_LED_PIN, LOW);
+        }
+    }
     } else if (status & (1ULL << BUTTON_PIN)){
       ws2812SetColor(3);
       
@@ -951,8 +963,7 @@ void setup() {
     }
   } else { 
     Serial.println("Cold boot");
-    if(!initToF())
-      Serial.println("ToF sensor initialization failed");
+    
   }
   goToSleep();
 }
