@@ -29,7 +29,7 @@
 // =================== CONFIGURATION ===================
 #define CAMERA_ID         "cam2"   // ← This is the only difference from cam1
 #define MAX_FRAME_SIZE    1048576
-#define FIRMWARE_VERSION  "v3.1.5"
+#define FIRMWARE_VERSION  "v3.1.6"
 #define FIRMWARE_DEVICE   "slave_camera"
 #define GITHUB_REPO       "gperda/ESP32CameraTrap"
 #define WAKEUP_PIN        GPIO_NUM_21
