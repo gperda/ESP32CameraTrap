@@ -367,10 +367,14 @@ uint64_t getEpochMillis() {
     return (uint64_t)tv.tv_sec * 1000ULL + (tv.tv_usec / 1000ULL);
 }
 
+bool hasValidTime() {
+  const time_t minValidEpoch = 1704067200; // 2024-01-01 00:00:00 UTC
+  return time(nullptr) >= minValidEpoch;
+}
+
 bool quietHours() {
   time_t epochNow = time(nullptr);
-  const time_t minValidEpoch = 1704067200; // 2024-01-01 00:00:00 UTC
-  if (epochNow < minValidEpoch) {
+  if (!hasValidTime()) {
     Serial.println("[quiet-hours] Time not synced/valid, skipping quiet-hours gate");
     return false;
   }
@@ -467,31 +471,49 @@ bool waitForWsConnected(uint32_t timeoutMs) {
 }
 
 void connectWS() {
-  if(WiFi.status() == WL_CONNECTED){
-    //bool serverResolved = false;
-    bool serverResolved = true;
-    // if (ws_url.isEmpty()) {
-    //   Serial.printf("Resolving %s.local", server_hostname);
-    //   unsigned long t = millis();
-    //   serverResolved = resolveServer();
-    //   while (!serverResolved && millis() - t < MAX_WS_WAIT_TIME_MS) { delay(500); Serial.print("."); }
-    // }
-    if(serverResolved){
-      Serial.printf("\nConnecting to %s …\n", STRINGIFY(WS_URL));
-      String cfClientId = normalizeBuildFlagString(STRINGIFY(CF_ACCESS_CLIENT_ID));
-      String cfClientSecret = normalizeBuildFlagString(STRINGIFY(CF_ACCESS_CLIENT_SECRET));
-      if (cfClientId.length() > 0 && cfClientSecret.length() > 0) {
-        String accessHeaders =
-          String("CF-Access-Client-Id: ") + cfClientId + "\r\n" +
-          "CF-Access-Client-Secret: " + cfClientSecret;
-        client.setExtraHeaders(accessHeaders.c_str());
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  const uint32_t wsRetryWindowMs = 60000;
+  const uint32_t wsRetryDelayMs = 5000;
+  unsigned long retryStart = millis();
+
+  String cfClientId = normalizeBuildFlagString(STRINGIFY(CF_ACCESS_CLIENT_ID));
+  String cfClientSecret = normalizeBuildFlagString(STRINGIFY(CF_ACCESS_CLIENT_SECRET));
+  if (cfClientId.length() > 0 && cfClientSecret.length() > 0) {
+    String accessHeaders =
+      String("CF-Access-Client-Id: ") + cfClientId + "\r\n" +
+      "CF-Access-Client-Secret: " + cfClientSecret;
+    client.setExtraHeaders(accessHeaders.c_str());
+  }
+
+  while (WiFi.status() == WL_CONNECTED && !client.isConnected() && (millis() - retryStart < wsRetryWindowMs)) {
+    if (!hasValidTime()) {
+      Serial.println("WS: system time invalid, retrying NTP sync");
+      timeSynced = false;
+      syncTimeFromNTP();
+      if (!hasValidTime()) {
+        delay(wsRetryDelayMs);
+        continue;
       }
-      client.beginSslWithCA(STRINGIFY(WS_URL), 443, "/ws", ca_cert_start);
-      client.onEvent(onWsEvent);
-      bool wsReady = waitForWsConnected(MAX_WS_WAIT_TIME_MS);
-      if (!wsReady) {
-        Serial.println("WS did not reach connected state within timeout");
-      }
+    }
+
+    Serial.printf("\nConnecting to %s …\n", STRINGIFY(WS_URL));
+    client.beginSslWithCA(STRINGIFY(WS_URL), 443, "/ws", ca_cert_start);
+    client.onEvent(onWsEvent);
+    bool wsReady = waitForWsConnected(MAX_WS_WAIT_TIME_MS);
+    if (!wsReady) {
+      Serial.println("WS did not reach connected state within timeout; retrying");
+      delay(wsRetryDelayMs);
+    }
+  }
+
+  if (!client.isConnected()) {
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("WS: retry stopped because WiFi disconnected");
+    } else {
+      Serial.println("WS: retry window expired after 60 seconds");
     }
   }
 }

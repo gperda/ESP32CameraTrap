@@ -24,6 +24,7 @@
 #include "SD_MMC.h"
 #include "driver/rtc_io.h"
 #include <ota_update.h>
+#include "esp_sntp.h"
 
 // =================== CONFIGURATION ===================
 #define CAMERA_ID         "cam2"   // ← This is the only difference from cam1
@@ -121,6 +122,7 @@ volatile bool shouldOTA = false;
 volatile bool isUpToDate = false;
 RTC_DATA_ATTR uint32_t captureSuccessCount = 0;
 RTC_DATA_ATTR uint32_t captureFailCount = 0;
+volatile bool timeSynced = false;
 
 extern const char ca_cert_start[] asm("_binary_ca_cert_start");
 
@@ -291,6 +293,32 @@ void onSend(const uint8_t *mac_addr, esp_now_send_status_t status){
   Serial.print(status == ESP_NOW_SEND_SUCCESS ? "Delivered\n" : "Delivery Fail\n");
 }
 
+bool hasValidTime() {
+  const time_t minValidEpoch = 1704067200; // 2024-01-01 00:00:00 UTC
+  return time(nullptr) >= minValidEpoch;
+}
+
+void onTimeSync(struct timeval *tv) {
+  timeSynced = true;
+}
+
+void syncTimeFromNTP() {
+  sntp_set_time_sync_notification_cb(onTimeSync);
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov"); // UTC, no DST offset
+
+  unsigned long start = millis();
+  Serial.println();
+  Serial.print("Syncing time");
+  while (!timeSynced && millis() - start < 10000) {
+    Serial.print(".");
+    delay(500);
+  }
+
+  if (!timeSynced) {
+    Serial.println("NTP sync failed/timed out");
+  }
+}
+
 void onReceive(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
     if (len < (int)sizeof(SyncPacket)) return;
 
@@ -317,7 +345,8 @@ void connectToWiFi() {
   
   unsigned long t = millis();
   while (WiFi.status() != WL_CONNECTED && millis() -t < MAX_WIFI_WAIT_TIME_MS) { delay(500); Serial.print("."); }
-  if(WiFi.status() == WL_CONNECTED){    
+  if(WiFi.status() == WL_CONNECTED){
+    syncTimeFromNTP();
     WiFi.config(WiFi.localIP(), WiFi.gatewayIP(), WiFi.subnetMask(),
                 IPAddress(1,1,1,1), IPAddress(8,8,8,8));
     Serial.printf(" OK  IP=%s\n", WiFi.localIP().toString().c_str());
@@ -344,31 +373,49 @@ bool waitForWsConnected(uint32_t timeoutMs) {
 
 // =================== Connect to WS ===================
 void connectWS() {
-  if(WiFi.status() == WL_CONNECTED){
-    //bool serverResolved = false;
-    bool serverResolved = true;
-    // if (ws_url.isEmpty()) {
-    //   Serial.printf("Resolving %s.local", server_hostname);
-    //   unsigned long t = millis();
-    //   serverResolved = resolveServer();
-    //   while (!serverResolved && millis() - t < MAX_WS_WAIT_TIME_MS) { delay(500); Serial.print("."); }
-    // }
-    if(serverResolved){
-      Serial.printf("\nConnecting to %s …\n", STRINGIFY(WS_URL));
-      String cfClientId = normalizeBuildFlagString(STRINGIFY(CF_ACCESS_CLIENT_ID));
-      String cfClientSecret = normalizeBuildFlagString(STRINGIFY(CF_ACCESS_CLIENT_SECRET));
-      if (cfClientId.length() > 0 && cfClientSecret.length() > 0) {
-        String accessHeaders =
-          String("CF-Access-Client-Id: ") + cfClientId + "\r\n" +
-          "CF-Access-Client-Secret: " + cfClientSecret;
-        client.setExtraHeaders(accessHeaders.c_str());
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  const uint32_t wsRetryWindowMs = 60000;
+  const uint32_t wsRetryDelayMs = 5000;
+  unsigned long retryStart = millis();
+
+  String cfClientId = normalizeBuildFlagString(STRINGIFY(CF_ACCESS_CLIENT_ID));
+  String cfClientSecret = normalizeBuildFlagString(STRINGIFY(CF_ACCESS_CLIENT_SECRET));
+  if (cfClientId.length() > 0 && cfClientSecret.length() > 0) {
+    String accessHeaders =
+      String("CF-Access-Client-Id: ") + cfClientId + "\r\n" +
+      "CF-Access-Client-Secret: " + cfClientSecret;
+    client.setExtraHeaders(accessHeaders.c_str());
+  }
+
+  while (WiFi.status() == WL_CONNECTED && !client.isConnected() && (millis() - retryStart < wsRetryWindowMs)) {
+    if (!hasValidTime()) {
+      Serial.println("WS: system time invalid, retrying NTP sync");
+      timeSynced = false;
+      syncTimeFromNTP();
+      if (!hasValidTime()) {
+        delay(wsRetryDelayMs);
+        continue;
       }
-      client.beginSslWithCA(STRINGIFY(WS_URL), 443, "/ws", ca_cert_start);
-      client.onEvent(onWsEvent);
-      bool wsReady = waitForWsConnected(MAX_WS_WAIT_TIME_MS);
-      if (!wsReady) {
-        Serial.println("WS did not reach connected state within timeout");
-      }
+    }
+
+    Serial.printf("\nConnecting to %s …\n", STRINGIFY(WS_URL));
+    client.beginSslWithCA(STRINGIFY(WS_URL), 443, "/ws", ca_cert_start);
+    client.onEvent(onWsEvent);
+    bool wsReady = waitForWsConnected(MAX_WS_WAIT_TIME_MS);
+    if (!wsReady) {
+      Serial.println("WS did not reach connected state within timeout; retrying");
+      delay(wsRetryDelayMs);
+    }
+  }
+
+  if (!client.isConnected()) {
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("WS: retry stopped because WiFi disconnected");
+    } else {
+      Serial.println("WS: retry window expired after 60 seconds");
     }
   }
 }
