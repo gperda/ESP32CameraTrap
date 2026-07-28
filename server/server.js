@@ -1216,12 +1216,15 @@ wss.on('connection', (ws, req) => {
       }
 
       if (parsedTextJson?.type === 'cam_diag') {
+        console.log(parsedTextJson);
         const normalized = sanitizeCameraDiagnostics(parsedTextJson, ws.cameraId);
+        console.log(normalized);
         if (!normalized) {
           console.warn('[diag] Ignored malformed camera diagnostics payload');
           return;
         }
         cameraDiagnostics[normalized.camId] = normalized;
+        console.log(cameraDiagnostics);
         broadcastStatus();
         return;
       }

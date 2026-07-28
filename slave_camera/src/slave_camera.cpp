@@ -201,7 +201,7 @@ int initCamera(void) {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 16000000;
+  config.xclk_freq_hz = 24000000;
   config.frame_size = FRAMESIZE_FHD;
   config.pixel_format = PIXFORMAT_JPEG; // for streaming
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
@@ -567,6 +567,7 @@ void loop() {
     if(captureToSD(captureTimestamp) == 0)
         Serial.println("Error with capture");
     didWork = true;
+    esp_camera_deinit();
   } 
   if (doSend) {
     ws2812SetColor(3);
