@@ -368,7 +368,8 @@ uint64_t getEpochMillis() {
 }
 
 bool hasValidTime() {
-  const time_t minValidEpoch = 1704067200; // 2024-01-01 00:00:00 UTC
+  // Keep a floor aligned with currently issued LE chain validity.
+  const time_t minValidEpoch = 1767225600; // 2026-01-01 00:00:00 UTC
   return time(nullptr) >= minValidEpoch;
 }
 
