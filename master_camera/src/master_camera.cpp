@@ -23,7 +23,7 @@
 #define CAMERA_ID                 "cam1"
 #define MAX_FRAME_SIZE            1048576
 
-#define FIRMWARE_VERSION          "v2.2.2"
+#define FIRMWARE_VERSION          "v3.1.0"
 #define FIRMWARE_DEVICE           "master_camera"
 #define GITHUB_REPO               "gperda/ESP32CameraTrap"
 #define uS_TO_S_FACTOR            1000000ULL 
@@ -38,7 +38,7 @@
 #define TOF_SDA_PIN               GPIO_NUM_41
 #define TOF_SCL_PIN               GPIO_NUM_42
 
-#define TOF_SENSOR_WAIT_TIME_S    30
+#define TOF_SENSOR_WAIT_TIME_S    10
 #define TOF_SENSOR_WAIT_TIME_US TOF_SENSOR_WAIT_TIME_S * uS_TO_S_FACTOR
 #define TOF_I2C_SPEED             1000000 // 1 MHz
 #define TOF_RANGING_FREQ_HZ       15
@@ -53,6 +53,10 @@
 #define MAX_WIFI_WAIT_TIME_MS     6000
 #define MAX_WS_WAIT_TIME_MS       4000
 #define WAKEUP_TIMER_SECONDS      10
+
+#define QUIET_HOURS_START_HOUR    21
+#define QUIET_HOURS_END_HOUR      5
+#define QUIET_HOURS_UTC_OFFSET_H  2
 
 
 #ifndef CF_ACCESS_CLIENT_ID
@@ -361,6 +365,25 @@ uint64_t getEpochMillis() {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return (uint64_t)tv.tv_sec * 1000ULL + (tv.tv_usec / 1000ULL);
+}
+
+bool quietHours() {
+  time_t epochNow = time(nullptr);
+  const time_t minValidEpoch = 1704067200; // 2024-01-01 00:00:00 UTC
+  if (epochNow < minValidEpoch) {
+    Serial.println("[quiet-hours] Time not synced/valid, skipping quiet-hours gate");
+    return false;
+  }
+
+  time_t localEpoch = epochNow + (QUIET_HOURS_UTC_OFFSET_H * 3600);
+  int localHour = (int)((localEpoch / 3600) % 24);
+  bool inQuietHours = (localHour >= QUIET_HOURS_START_HOUR) || (localHour < QUIET_HOURS_END_HOUR);
+
+  Serial.printf("[quiet-hours] UTC+%d hour=%d inQuietHours=%s\n",
+          QUIET_HOURS_UTC_OFFSET_H,
+          localHour,
+          inQuietHours ? "true" : "false");
+  return inQuietHours;
 }
 
 void onTimeSync(struct timeval *tv) {
@@ -824,6 +847,11 @@ void setup() {
     if (status & (1ULL << MOTIONSENSOR_PIN)) {
         motionWakeCount++;
         Serial.println("Woke up from motion sensor INT");
+
+        if (quietHours()) {
+          Serial.println("[quiet-hours] Motion path blocked, returning to sleep");
+          goToSleep();
+        }
 
 
         //     //Uncomment for PIR TEST
