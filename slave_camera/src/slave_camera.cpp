@@ -491,7 +491,7 @@ void goToSleep() {
 
   esp_wifi_stop();
   WiFi.mode(WIFI_OFF);
-  ws2812SetColor(1);
+  // ws2812SetColor(1);
 
   esp_sleep_enable_ext0_wakeup(WAKEUP_PIN, 1);
   esp_deep_sleep_start();
@@ -534,7 +534,9 @@ bool performOTAIfAvailable() {
 void setup() {
   Serial.begin(115200);
   Serial.printf("\n=== ESP32-CAM [%s] ===\n", CAMERA_ID);
-  ws2812Init();
+  pinMode(48, OUTPUT);
+  digitalWrite(48, LOW);
+  // ws2812Init();
 
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
   if (cause == ESP_SLEEP_WAKEUP_EXT0) {
@@ -546,7 +548,7 @@ void setup() {
   initEspNow();
   sdmmcInit();
   createDir(SD_MMC, "/camera");
-  ws2812SetColor(2);
+  // ws2812SetColor(2);
 
   // Resume OTA that was interrupted by WiFi failure on a prior wakeup
   if (otaPendingRTC) { shouldOTA = true; }
@@ -570,7 +572,7 @@ void loop() {
     esp_camera_deinit();
   } 
   if (doSend) {
-    ws2812SetColor(3);
+    // ws2812SetColor(3);
     uint8_t ack = 0xCC;
     Serial.print("Slave ready: ");
     esp_now_send(masterMAC, &ack, 1);
@@ -610,7 +612,7 @@ void loop() {
       } else Serial.println("WiFi currently unavailable, will send later");
     }
     if (shouldOTA) {
-      ws2812SetColor(3);
+      // ws2812SetColor(3);
       if (WiFi.status() != WL_CONNECTED) {
         Serial.println("[OTA] WiFi unavailable, will retry on next wakeup");
         goToSleep();
