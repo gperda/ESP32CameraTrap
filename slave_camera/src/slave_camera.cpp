@@ -29,7 +29,7 @@
 // =================== CONFIGURATION ===================
 #define CAMERA_ID         "cam2"   // ← This is the only difference from cam1
 #define MAX_FRAME_SIZE    1048576
-#define FIRMWARE_VERSION  "v3.1.6"
+#define FIRMWARE_VERSION  "v3.1.7"
 #define FIRMWARE_DEVICE   "slave_camera"
 #define GITHUB_REPO       "gperda/ESP32CameraTrap"
 #define WAKEUP_PIN        GPIO_NUM_21
@@ -124,7 +124,14 @@ RTC_DATA_ATTR uint32_t captureSuccessCount = 0;
 RTC_DATA_ATTR uint32_t captureFailCount = 0;
 volatile bool timeSynced = false;
 
-extern const char ca_cert_start[] asm("_binary_ca_cert_start");
+extern const char ca_cert_start[] asm("_binary____ca_cert_start");
+extern const char ca_cert_start_legacy[] asm("_binary_ca_cert_start") __attribute__((weak));
+
+static const char* getEmbeddedCaCert() {
+  // Support both symbol names so cert path changes do not break linking.
+  if (ca_cert_start_legacy) return ca_cert_start_legacy;
+  return ca_cert_start;
+}
 
 struct_message out_msg;
 struct_message in_msg;
@@ -403,7 +410,7 @@ void connectWS() {
     }
 
     Serial.printf("\nConnecting to %s …\n", STRINGIFY(WS_URL));
-    client.beginSslWithCA(STRINGIFY(WS_URL), 443, "/ws", ca_cert_start);
+    client.beginSslWithCA(STRINGIFY(WS_URL), 443, "/ws", getEmbeddedCaCert());
     client.onEvent(onWsEvent);
     bool wsReady = waitForWsConnected(MAX_WS_WAIT_TIME_MS);
     if (!wsReady) {

@@ -23,7 +23,7 @@
 #define CAMERA_ID                 "cam1"
 #define MAX_FRAME_SIZE            1048576
 
-#define FIRMWARE_VERSION          "v3.1.6"
+#define FIRMWARE_VERSION          "v3.1.7"
 #define FIRMWARE_DEVICE           "master_camera"
 #define GITHUB_REPO               "gperda/ESP32CameraTrap"
 #define uS_TO_S_FACTOR            1000000ULL 
@@ -99,7 +99,14 @@ WebSocketsClient client;
 volatile bool shouldCapture = false;
 bool wsConnected            = false;
 
-extern const char ca_cert_start[] asm("_binary_ca_cert_start");
+extern const char ca_cert_start[] asm("_binary____ca_cert_start");
+extern const char ca_cert_start_legacy[] asm("_binary_ca_cert_start") __attribute__((weak));
+
+static const char* getEmbeddedCaCert() {
+  // Support both symbol names so cert path changes do not break linking.
+  if (ca_cert_start_legacy) return ca_cert_start_legacy;
+  return ca_cert_start;
+}
 
 bool motionDetected = false;
 
@@ -501,7 +508,7 @@ void connectWS() {
     }
 
     Serial.printf("\nConnecting to %s …\n", STRINGIFY(WS_URL));
-    client.beginSslWithCA(STRINGIFY(WS_URL), 443, "/ws", ca_cert_start);
+    client.beginSslWithCA(STRINGIFY(WS_URL), 443, "/ws", getEmbeddedCaCert());
     client.onEvent(onWsEvent);
     bool wsReady = waitForWsConnected(MAX_WS_WAIT_TIME_MS);
     if (!wsReady) {
