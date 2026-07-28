@@ -23,7 +23,7 @@
 #define CAMERA_ID                 "cam1"
 #define MAX_FRAME_SIZE            1048576
 
-#define FIRMWARE_VERSION          "v3.1.8"
+#define FIRMWARE_VERSION          "v3.1.9"
 #define FIRMWARE_DEVICE           "master_camera"
 #define GITHUB_REPO               "gperda/ESP32CameraTrap"
 #define uS_TO_S_FACTOR            1000000ULL 
@@ -99,7 +99,7 @@ WebSocketsClient client;
 volatile bool shouldCapture = false;
 bool wsConnected            = false;
 
-extern const char ca_cert_start[] asm("_binary__media_ellie_Olympos_Freenove_ESP32_cameratrap_ca_cert_start");
+extern const char ca_cert_start[] asm("_binary_ca_cert_start");
 
 static const char* getEmbeddedCaCert() {
   return ca_cert_start;

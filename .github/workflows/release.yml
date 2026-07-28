@@ -44,6 +44,8 @@ jobs:
           fi
 
           printf '%s\n' "$CA_CERT_PEM" > ca.cert
+          cp ca.cert master_camera/ca.cert
+          cp ca.cert slave_camera/ca.cert
 
       - name: Prepare PlatformIO secrets
         env:
