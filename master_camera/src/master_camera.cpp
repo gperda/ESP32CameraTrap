@@ -23,7 +23,7 @@
 #define CAMERA_ID                 "cam1"
 #define MAX_FRAME_SIZE            1048576
 
-#define FIRMWARE_VERSION          "v3.1.0"
+#define FIRMWARE_VERSION          "v3.1.1"
 #define FIRMWARE_DEVICE           "master_camera"
 #define GITHUB_REPO               "gperda/ESP32CameraTrap"
 #define uS_TO_S_FACTOR            1000000ULL 
@@ -645,7 +645,7 @@ void goToSleep() {
   Serial.flush();
   esp_wifi_stop();
   WiFi.mode(WIFI_OFF);
-  ws2812SetColor(1);
+  // ws2812SetColor(1);
   gpio_deep_sleep_hold_en();
   uint64_t io_mask = (1ULL << MOTIONSENSOR_PIN) | (1ULL << BUTTON_PIN);
   esp_sleep_enable_ext1_wakeup_io(io_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
@@ -837,8 +837,8 @@ void setup() {
   sdmmcInit();
   createDir(SD_MMC, "/tofdumps");
   initEspNow();
-  ws2812Init();
-  ws2812SetColor(2);
+  // ws2812Init();
+  // ws2812SetColor(2);
 
   // ── Wake-cause guard ────────────────────────────────────────────────────
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
@@ -877,7 +877,7 @@ void setup() {
         deinitToF();
       }
     } else if (status & (1ULL << BUTTON_PIN)){
-      ws2812SetColor(3);
+      // ws2812SetColor(3);
       
       std::vector<String> flist = getSendList(SD_MMC, "/sendlist.txt");
       wakeSlave();
@@ -930,7 +930,7 @@ void setup() {
       }
       // ── OTA (ota_update received during poll above) ───────────────────────
       if (otaRequested || otaPendingRTC) {
-        ws2812SetColor(3);
+        // ws2812SetColor(3);
         if (WiFi.status() != WL_CONNECTED) { 
           Serial.println("[OTA] WiFi unavailable, will retry on next wakeup");
           goToSleep(); 
