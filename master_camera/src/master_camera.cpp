@@ -23,7 +23,7 @@
 #define CAMERA_ID                 "cam1"
 #define MAX_FRAME_SIZE            1048576
 
-#define FIRMWARE_VERSION          "v4.1.8"
+#define FIRMWARE_VERSION          "v4.2.0"
 #define FIRMWARE_DEVICE           "master_camera"
 #define GITHUB_REPO               "gperda/ESP32CameraTrap"
 #define uS_TO_S_FACTOR            1000000ULL 
@@ -297,7 +297,7 @@ int initCamera(void) {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn     = PWDN_GPIO_NUM;
   config.pin_reset    = RESET_GPIO_NUM;
-  config.xclk_freq_hz   = 24000000;
+  config.xclk_freq_hz   = 8000000;
   config.frame_size     = FRAMESIZE_FHD;
   config.pixel_format   = PIXFORMAT_JPEG;
   config.grab_mode      = CAMERA_GRAB_WHEN_EMPTY;
@@ -847,6 +847,7 @@ void setup() {
 
   sdmmcInit();
   createDir(SD_MMC, "/tofdumps");
+  createDir(SD_MMC, "/camera");
   initEspNow();
   // ws2812Init();
   // ws2812SetColor(2);
@@ -866,8 +867,6 @@ void setup() {
 
 
         initCamera();
-        createDir(SD_MMC, "/camera");
-
 
         //     //Uncomment for PIR TEST
         if(initToF()){

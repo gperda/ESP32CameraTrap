@@ -28,7 +28,7 @@
 // =================== CONFIGURATION ===================
 #define CAMERA_ID         "cam2"   // ← This is the only difference from cam1
 #define MAX_FRAME_SIZE    1048576
-#define FIRMWARE_VERSION  "v4.1.6"
+#define FIRMWARE_VERSION  "v4.2.0"
 #define FIRMWARE_DEVICE   "slave_camera"
 #define GITHUB_REPO       "gperda/ESP32CameraTrap"
 #define WAKEUP_PIN        GPIO_NUM_21
@@ -202,7 +202,7 @@ int initCamera(void) {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 24000000;
+  config.xclk_freq_hz = 8000000;
   config.frame_size = FRAMESIZE_FHD;
   config.pixel_format = PIXFORMAT_JPEG; // for streaming
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
