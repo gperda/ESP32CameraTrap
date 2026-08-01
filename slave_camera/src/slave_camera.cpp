@@ -28,7 +28,7 @@
 // =================== CONFIGURATION ===================
 #define CAMERA_ID         "cam2"   // ← This is the only difference from cam1
 #define MAX_FRAME_SIZE    1048576
-#define FIRMWARE_VERSION  "v4.1.4"
+#define FIRMWARE_VERSION  "v4.1.6"
 #define FIRMWARE_DEVICE   "slave_camera"
 #define GITHUB_REPO       "gperda/ESP32CameraTrap"
 #define WAKEUP_PIN        GPIO_NUM_21
@@ -84,7 +84,8 @@ const unsigned long RECONNECT_MS = 5000;
 static uint8_t* g_sendBuf = nullptr;
 
 int frameCount =0;
-uint8_t masterMAC[] = {0xD0, 0xCF, 0x13, 0x26, 0xFB, 0x54};
+// uint8_t masterMAC[] = {0xD0, 0xCF, 0x13, 0x26, 0xFB, 0x54};
+uint8_t masterMAC[] = {0x1C, 0xDB, 0xD4, 0x4E, 0x91, 0x00};
 
 typedef struct struct_message {
   uint64_t timestamp;
