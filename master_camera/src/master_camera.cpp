@@ -23,7 +23,7 @@
 #define CAMERA_ID                 "cam1"
 #define MAX_FRAME_SIZE            1048576
 
-#define FIRMWARE_VERSION          "v4.1.7"
+#define FIRMWARE_VERSION          "v4.1.8"
 #define FIRMWARE_DEVICE           "master_camera"
 #define GITHUB_REPO               "gperda/ESP32CameraTrap"
 #define uS_TO_S_FACTOR            1000000ULL 
@@ -865,12 +865,14 @@ void setup() {
         }
 
 
+        initCamera();
+        createDir(SD_MMC, "/camera");
+
+
         //     //Uncomment for PIR TEST
         if(initToF()){
           Serial.printf("[ToF] Ranging started at %d Hz\n", TOF_RANGING_FREQ_HZ);
-          initCamera();
           // s_cam->set_reg(s_cam, 0x3008, 0xFF, 0x82);
-          createDir(SD_MMC, "/camera");
 
           uint64_t startTime   = esp_timer_get_time();
           uint64_t elapsedTime = 0;
@@ -879,15 +881,14 @@ void setup() {
             if(digitalRead(TOF_SENSOR_INTERRUPT_PIN) == LOW){
               onTofInt();
               delay(500);
-              // delay(2000);
-              //onTofIntLight();
             }
             elapsedTime = esp_timer_get_time() - startTime;
           }
 
-          esp_camera_deinit();
         deinitToF();
       }
+
+      esp_camera_deinit();
     } else if (status & (1ULL << BUTTON_PIN)){
       // ws2812SetColor(3);
       
