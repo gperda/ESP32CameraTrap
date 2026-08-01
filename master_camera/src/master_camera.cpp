@@ -23,7 +23,7 @@
 #define CAMERA_ID                 "cam1"
 #define MAX_FRAME_SIZE            1048576
 
-#define FIRMWARE_VERSION          "v4.1.5"
+#define FIRMWARE_VERSION          "v4.1.7"
 #define FIRMWARE_DEVICE           "master_camera"
 #define GITHUB_REPO               "gperda/ESP32CameraTrap"
 #define uS_TO_S_FACTOR            1000000ULL 
@@ -868,7 +868,6 @@ void setup() {
         //     //Uncomment for PIR TEST
         if(initToF()){
           Serial.printf("[ToF] Ranging started at %d Hz\n", TOF_RANGING_FREQ_HZ);
-          esp_camera_deinit();
           initCamera();
           // s_cam->set_reg(s_cam, 0x3008, 0xFF, 0x82);
           createDir(SD_MMC, "/camera");
@@ -885,6 +884,8 @@ void setup() {
             }
             elapsedTime = esp_timer_get_time() - startTime;
           }
+
+          esp_camera_deinit();
         deinitToF();
       }
     } else if (status & (1ULL << BUTTON_PIN)){

@@ -598,7 +598,7 @@ void loop() {
         g_sendBuf = (uint8_t*)ps_malloc(sizeof(Header) + MAX_FRAME_SIZE);
         if (!g_sendBuf) {
           Serial.println("FATAL: Could not allocate send buffer in PSRAM");
-          while (true) delay(1000);  // Halt — nothing will work without this
+          while (true) delay(1000);  // Halt  nothing will work without this
         }
         
         for (const String& line : flist) {
