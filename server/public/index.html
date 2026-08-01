@@ -1258,10 +1258,12 @@ function renderCameraDiagnostics(camId, diag) {
     const ackOk = asNonNegativeInteger(diag.ackSuccessCount);
     const ackFail = asNonNegativeInteger(diag.ackFailCount);
     const motion = asNonNegativeInteger(diag.motionWakeCount);
+    const highMotion = asNonNegativeInteger(diag.highMotionCount);
     const ackOkText = ackOk === null ? '—' : String(ackOk);
     const ackFailText = ackFail === null ? '—' : String(ackFail);
     const motionText = motion === null ? '—' : String(motion);
-    target.textContent = `captures ${capturesText} · fail ${failsText} · sync ${ackOkText}/${ackFailText} · motion ${motionText} · ${sdText}`;
+    const highMotionText = highMotion === null ? '—' : String(highMotion);
+    target.textContent = `captures ${capturesText} · fail ${failsText} · sync ${ackOkText}/${ackFailText} · motion ${motionText} · highMotionFails ${highMotionText} ·${sdText}`;
     return;
   }
 

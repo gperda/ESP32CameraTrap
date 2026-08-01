@@ -1133,6 +1133,7 @@ function sanitizeCameraDiagnostics(payload, fallbackCamId = null) {
     captureFailCount: toNonNegativeInt(payload.captureFailCount),
     imagesCaptured: toNonNegativeInt(payload.imagesCaptured),
     motionWakeCount: toNonNegativeInt(payload.motionWakeCount),
+    highMotionCount: toNonNegativeInt(payload.highMotionCount),
     ackSuccessCount: toNonNegativeInt(payload.ackSuccessCount),
     ackFailCount: toNonNegativeInt(payload.ackFailCount),
     sdTotalBytes: toNonNegativeInt(payload.sdTotalBytes),

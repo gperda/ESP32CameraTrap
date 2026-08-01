@@ -23,7 +23,7 @@
 #define CAMERA_ID                 "cam1"
 #define MAX_FRAME_SIZE            1048576
 
-#define FIRMWARE_VERSION          "v4.1.4"
+#define FIRMWARE_VERSION          "v4.1.5"
 #define FIRMWARE_DEVICE           "master_camera"
 #define GITHUB_REPO               "gperda/ESP32CameraTrap"
 #define uS_TO_S_FACTOR            1000000ULL 
@@ -139,6 +139,7 @@ RTC_DATA_ATTR uint32_t ackSuccessCount = 0;
 RTC_DATA_ATTR uint32_t ackFailCount = 0;
 RTC_DATA_ATTR uint32_t captureSuccessCount = 0;
 RTC_DATA_ATTR uint32_t captureFailCount = 0;
+RTC_DATA_ATTR uint32_t highMotionCount = 0;
 
 volatile bool timeSynced = false;
 
@@ -174,12 +175,13 @@ void sendMasterDiagnostics() {
   int n = snprintf(
     payload,
     sizeof(payload),
-    "{\"type\":\"cam_diag\",\"camId\":\"%s\",\"captureSuccessCount\":%lu,\"captureFailCount\":%lu,\"imagesCaptured\":%lu,\"motionWakeCount\":%lu,\"ackSuccessCount\":%lu,\"ackFailCount\":%lu,\"sdTotalBytes\":%llu,\"sdUsedBytes\":%llu,\"sdFreeBytes\":%llu,\"sdUsagePct\":%lu,\"sdMetricsValid\":%s}",
+    "{\"type\":\"cam_diag\",\"camId\":\"%s\",\"captureSuccessCount\":%lu,\"captureFailCount\":%lu,\"imagesCaptured\":%lu,\"motionWakeCount\":%lu,\"highMotionCount\":%lu,\"ackSuccessCount\":%lu,\"ackFailCount\":%lu,\"sdTotalBytes\":%llu,\"sdUsedBytes\":%llu,\"sdFreeBytes\":%llu,\"sdUsagePct\":%lu,\"sdMetricsValid\":%s}",
     CAMERA_ID,
     (unsigned long)captureSuccessCount,
     (unsigned long)captureFailCount,
     (unsigned long)captureSuccessCount,
     (unsigned long)motionWakeCount,
+    (unsigned long)highMotionCount,
     (unsigned long)ackSuccessCount,
     (unsigned long)ackFailCount,
     (unsigned long long)sdTotal,
@@ -195,6 +197,13 @@ void sendMasterDiagnostics() {
   }
 
   client.sendTXT(payload);
+
+  captureFailCount=0;
+  captureSuccessCount=0;
+  motionWakeCount=0;
+  highMotionCount=0;
+  ackSuccessCount=0;
+  ackFailCount=0;
 }
 
 // =================== ToF helpers ===================
@@ -804,6 +813,8 @@ void onTofInt(){
         saveToFdump("/tofdumps/" + String(pkt.timestamp_ms) + ".json", tofData, motion);
         captureSuccessCount++;
       }
+    }else{
+      highMotionCount++;
     }
 
   }
