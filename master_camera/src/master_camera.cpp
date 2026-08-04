@@ -23,7 +23,7 @@
 #define CAMERA_ID                 "cam1"
 #define MAX_FRAME_SIZE            1048576
 
-#define FIRMWARE_VERSION          "v4.2.0"
+#define FIRMWARE_VERSION          "v4.2.1"
 #define FIRMWARE_DEVICE           "master_camera"
 #define GITHUB_REPO               "gperda/ESP32CameraTrap"
 #define uS_TO_S_FACTOR            1000000ULL 
